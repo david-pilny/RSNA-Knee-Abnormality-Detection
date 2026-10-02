@@ -150,8 +150,10 @@ for f, (_, va) in enumerate(splits):
 
 print(f"training pool: {len(pool)} | gold hold-out: {len(gold_df)} | site groups: {pool.site.nunique()}")
 print("series available:", {r: f"{pool[r].mean():.1%}" for r in CFG["roles"]})
-display(pool.groupby("fold").agg(studies=("StudyInstanceUID", "size"), sites=("site", "nunique"),
-                                 effusion_pos=("Effusion", lambda s: (s > 0.5).mean())).round(3))
+fold_table = pool.groupby("fold").agg(studies=("StudyInstanceUID", "size"), sites=("site", "nunique"),
+                                      effusion_pos=("Effusion", lambda s: (s > 0.5).mean())).round(3)
+display(fold_table)
+print(fold_table.to_string())          # commit logs do not show display() tables
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
 fig, axes = plt.subplots(1, 2, figsize=(15, 4))
@@ -522,6 +524,7 @@ gold_ens = np.mean(gold_preds, axis=0)
 table = pd.concat(val_rows + [auc_table(gold_ens, gold_df[LABELS].to_numpy(dtype=float)).rename("GOLD (ensemble)")], axis=1)
 table.loc["macro"] = table.mean()
 display(table.round(3))
+print(table.round(3).to_string())          # commit logs do not show display() tables
 
 fig, ax = plt.subplots(figsize=(10, 4.5))
 table.drop("macro").plot.bar(ax=ax, width=0.8)

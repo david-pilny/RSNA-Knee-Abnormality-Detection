@@ -8,13 +8,18 @@
 # hidden test DICOMs ──► knee_preproc.process_study()  (the SAME code that built the training cache)
 #                              │  3 series per study → 24 × 224 × 224 uint8
 #                              ▼
-#                     model_fold0.pt … model_fold4.pt   (whatever folds are in the dataset)
+#                     model group 1 (e.g. trained on labels_v3):  model_fold0.pt … model_fold4.pt
+#                     model group 2 (e.g. trained on labels_v4):  model_fold0.pt … model_fold4.pt
 #                              │  each model sees the study twice: as is, and mirrored (left↔right knee)
 #                              ▼
-#                     average of all predictions  ──►  submission.csv
+#                     average inside each group  →  rank-blend the groups per finding  ──►  submission.csv
 # ```
 #
-# **Inputs to attach:** the competition data, `knee-models` (weights + `train_config.json`), `knee-mri-cache`
+# **Model groups.** Every attached dataset that contains a `train_config.json` is one group (its `model_fold*.pt` files
+# are averaged). With one group the notebook behaves as before. With several, the groups are blended **by rank**
+# (section 2 explains why), with an optional weight per group and finding.
+#
+# **Inputs to attach:** the competition data, one or more model datasets (weights + `train_config.json`), `knee-mri-cache`
 # (only for `knee_preproc.py` and its `config.json`; the 10 GB of shards are not read), and `knee-dicom-wheels`
 # (offline DICOM decoders).
 # **Settings:** Accelerator **GPU T4 ×2** (one GPU is used), Internet **off** (required for submission).
@@ -39,6 +44,10 @@ CHUNK = 32                    # studies preprocessed in parallel, then predicted
 USE_TTA = True                # also predict the mirrored knee and average
 RAISE_IF_DECODE_FAIL = None   # e.g. 0.05: in the scoring run, fail on purpose if >5 % of series can't be read
                               # (a one-off diagnostic: "Submission error" then means decoding is broken)
+# Weight of a model group for a finding (default 1 for everything not listed). A group is named after the label file it
+# was trained on. The v3 labels used the wrong definitions for ACL, MCL and PF OA, so the v3 models are left out there.
+# Ignored when only one group is attached. {} = equal weights everywhere.
+BLEND_WEIGHTS = {"labels_v3": {"ACL": 0, "MCL": 0, "PF OA": 0}}
 
 OUT_DIR = Path(os.environ.get("OUT_DIR", "/kaggle/working"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -65,18 +74,30 @@ def find_dirs_with(filename, base=INPUT, max_depth=6, skip=()):
 
 ROOT = next((Path(p) for p in [os.environ.get("KNEE_ROOT", ""), f"{INPUT}/competitions/{SLUG}", f"{INPUT}/{SLUG}"]
              if p and (Path(p) / "test.csv").exists()), None) or find_dirs_with("test.csv")[0]
-MODEL_DIR = find_dirs_with("train_config.json", skip={ROOT})[0]
 PREPROC_DIR = find_dirs_with("knee_preproc.py", skip={ROOT})[0]
 CACHE_CFG = json.loads(next(PREPROC_DIR.rglob("config.json")).read_text())
-TRAIN_CFG = json.loads((MODEL_DIR / "train_config.json").read_text())
-MODEL_FILES = sorted(MODEL_DIR.glob("model_fold*.pt"))
+
+GROUPS = []                   # one per attached model dataset
+for d in sorted(find_dirs_with("train_config.json", skip={ROOT})):
+    cfg = json.loads((d / "train_config.json").read_text())
+    files = sorted(d.glob("model_fold*.pt"))
+    if not files:
+        continue
+    name = str(cfg.get("labels_file", d.name)).rsplit(".", 1)[0]
+    if any(g["name"] == name for g in GROUPS):                # two groups trained on the same labels: add the folder name
+        name = f"{name}@{d.name}"
+    GROUPS.append({"name": name, "dir": d, "cfg": cfg, "files": files})
 
 print("scoring re-run:", IS_RERUN)
 print("competition :", ROOT)
-print("models      :", MODEL_DIR, [f.name for f in MODEL_FILES])
-print("preprocess  :", PREPROC_DIR)
-print("backbone", TRAIN_CFG["backbone"], "| roles", TRAIN_CFG["roles"], "| DEPTH", CACHE_CFG["DEPTH"], "| IMG", CACHE_CFG["IMG"])
-assert MODEL_FILES, "no model_fold*.pt found: is the knee-models dataset attached?"
+print("preprocess  :", PREPROC_DIR, "| DEPTH", CACHE_CFG["DEPTH"], "| IMG", CACHE_CFG["IMG"])
+assert GROUPS, "no train_config.json with model_fold*.pt found: is a models dataset attached?"
+for g in GROUPS:
+    print(f"model group '{g['name']}': {g['dir']} | {g['cfg']['backbone']} | roles {g['cfg']['roles']} | "
+          f"{[f.name for f in g['files']]} | gold AUC at training {g['cfg'].get('gold_macro_auc', float('nan')):.3f}")
+    assert g["cfg"].get("depth", CACHE_CFG["DEPTH"]) == CACHE_CFG["DEPTH"] and g["cfg"].get("img", CACHE_CFG["IMG"]) == CACHE_CFG["IMG"], \
+        "this group was trained on another cache shape than knee_preproc produces"
+G = len(GROUPS)
 
 # %% [markdown]
 # ## 2. CSVs, prior, and the safety-net submission
@@ -84,12 +105,30 @@ assert MODEL_FILES, "no model_fold*.pt found: is the knee-models dataset attache
 # Same as in the dummy notebook: `sample_submission.csv` defines rows and columns; the prior (label prevalence among gold
 # studies, here taken from the training config's label list with 0.5 as fallback) is what a study gets if its images
 # cannot be processed. The safety net is written before any image is touched.
+#
+# **Blending several groups by rank.** The metric (AUC) only looks at the *order* of the studies within a finding. Two
+# model groups trained on different labels can order the studies equally well and still output numbers on different
+# scales (the v4 labels have fewer positives, so those models give lower probabilities). Averaging the raw numbers would
+# let the group with the wider scale dominate. So each group's predictions are first replaced by their rank among all
+# test studies (0 = lowest, 1 = highest), and the ranks are averaged with the weights from section 1.
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
 test_series = pd.read_csv(ROOT / "test_series.csv")
 sample = pd.read_csv(ROOT / "sample_submission.csv")
 ID_COL, LABELS = sample.columns[0], list(sample.columns[1:])
-assert LABELS == TRAIN_CFG["labels"], "label columns differ from training"
+from scipy.stats import rankdata
+for g in GROUPS:
+    assert LABELS == g["cfg"]["labels"], f"label columns differ from training (group {g['name']})"
+
+W = np.ones((G, len(LABELS)))                                 # weight per group and finding
+if G > 1:
+    for gname, per in BLEND_WEIGHTS.items():
+        assert gname in [g["name"] for g in GROUPS], f"BLEND_WEIGHTS names '{gname}', attached groups: {[g['name'] for g in GROUPS]}"
+        for lab, w in per.items():
+            W[[g["name"] for g in GROUPS].index(gname), LABELS.index(lab)] = w
+    assert (W.sum(0) > 0).all(), "every finding needs at least one group with a positive weight"
+    print("blend weights (rows = groups, columns = findings):")
+    print(pd.DataFrame(W, index=[g["name"] for g in GROUPS], columns=LABELS).to_string())
 
 prior = {l: 0.5 for l in LABELS}
 try:
@@ -100,9 +139,18 @@ except Exception as e:
     print("prior fallback 0.5:", e)
 
 def make_submission(preds):
+    # preds: {study: array (groups, findings)} → one number per study and finding
     sub = sample[[ID_COL]].copy()
+    out = pd.DataFrame(index=pd.Index([], name=ID_COL), columns=LABELS, dtype=float)
+    if preds:
+        uids = list(preds)
+        A = np.stack([preds[u] for u in uids])                # (studies, groups, findings)
+        if G > 1:
+            A = rankdata(A, axis=0) / len(uids)               # rank of each study within its group and finding
+        out = pd.DataFrame((A * W[None]).sum(1) / W.sum(0)[None], index=uids, columns=LABELS)
     for lab in LABELS:
-        sub[lab] = sub[ID_COL].map(lambda u: preds.get(u, {}).get(lab, np.nan)).fillna(prior[lab]).clip(0, 1)
+        fill = prior[lab] if G == 1 else 0.5                  # a failed study: prior (one group) or the middle rank
+        sub[lab] = sub[ID_COL].map(out[lab]).fillna(fill).clip(0, 1)
     return sub
 
 def validate_and_write(sub, path=OUT_DIR / "submission.csv"):
@@ -158,7 +206,8 @@ for mod in ["pylibjpeg", "libjpeg", "openjpeg"]:
 #
 # - `knee_preproc.py` is imported from the cache dataset: the **identical** code that produced the training images.
 # - Each `model_fold*.pt` is loaded into the same architecture as in training (copied below unchanged), with
-#   `pretrained=False`: the ImageNet weights are not needed, our trained weights replace them.
+#   `pretrained=False`: the ImageNet weights are not needed, our trained weights replace them. Every group is built
+#   from its own `train_config.json` (backbone, series, images per series, normalisation).
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
 sys.dont_write_bytecode = True
@@ -172,9 +221,10 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 CHANNELS_LAST = DEVICE == "cuda"
 torch.backends.cudnn.benchmark = True
 ROLES_ALL = {k: tuple(v) for k, v in CACHE_CFG["ROLES"].items()}
-ROLES = TRAIN_CFG["roles"]
-DEPTH, IMG, NT = CACHE_CFG["DEPTH"], CACHE_CFG["IMG"], TRAIN_CFG["n_triplets"]
-MEAN, STD = TRAIN_CFG["mean"], TRAIN_CFG["std"]
+ROLES = []                                                    # every series type any group needs, preprocessed once
+for g in GROUPS:
+    ROLES += [r for r in g["cfg"]["roles"] if r not in ROLES]
+DEPTH, IMG = CACHE_CFG["DEPTH"], CACHE_CFG["IMG"]
 
 # ---- architecture: identical to the training notebook ----
 class AttnPool(nn.Module):
@@ -209,9 +259,9 @@ def make_triplets(x, n):
     centers = torch.linspace(1, D - 2, n, device=x.device).round().long()
     return x[:, :, torch.stack([centers - 1, centers, centers + 1], dim=1)]
 
-def prepare(x_u8):
+def prepare(x_u8, cfg):
     x = x_u8.to(DEVICE).float() / 255.0
-    return (make_triplets(x, NT) - MEAN) / STD
+    return (make_triplets(x, cfg["n_triplets"]) - cfg["mean"]) / cfg["std"]
 
 def mirror(x_u8):
     # the same "other knee" mirror used as training augmentation
@@ -220,25 +270,31 @@ def mirror(x_u8):
         x[:, j] = x[:, j].flip(1) if role.startswith("sag") else x[:, j].flip(3)
     return x
 
-models = []
-for f in MODEL_FILES:
-    m = KneeNet(TRAIN_CFG["backbone"], False, len(ROLES)).to(DEVICE)
-    m.load_state_dict({k: v.float() for k, v in torch.load(f, map_location=DEVICE).items()})
-    if CHANNELS_LAST:
-        m = m.to(memory_format=torch.channels_last)
-    models.append(m.eval())
-print(f"loaded {len(models)} model(s) on {DEVICE}")
+for g in GROUPS:
+    g["role_idx"] = [ROLES.index(r) for r in g["cfg"]["roles"]]         # this group's series among the preprocessed ones
+    g["models"] = []
+    for f in g["files"]:
+        m = KneeNet(g["cfg"]["backbone"], False, len(g["cfg"]["roles"])).to(DEVICE)
+        m.load_state_dict({k: v.float() for k, v in torch.load(f, map_location=DEVICE).items()})
+        if CHANNELS_LAST:
+            m = m.to(memory_format=torch.channels_last)
+        g["models"].append(m.eval())
+    print(f"group '{g['name']}': loaded {len(g['models'])} model(s) on {DEVICE}")
 
 @torch.no_grad()
 def predict_batch(x_u8, rmask):
-    rm = rmask.to(DEVICE)
+    # → array (groups, studies, findings): inside a group, the mean over its fold models and the two views
     views = [x_u8, mirror(x_u8)] if USE_TTA else [x_u8]
-    probs = []
-    for m in models:
+    out = []
+    for g in GROUPS:
+        rm, probs = rmask[:, g["role_idx"]].to(DEVICE), []
         for v in views:
-            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=DEVICE == "cuda"):
-                probs.append(torch.sigmoid(m(prepare(v), rm).float()))
-    return torch.stack(probs).mean(0).cpu().numpy()
+            x = prepare(v[:, g["role_idx"]], g["cfg"])
+            for m in g["models"]:
+                with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=DEVICE == "cuda"):
+                    probs.append(torch.sigmoid(m(x, rm).float()))
+        out.append(torch.stack(probs).mean(0))
+    return torch.stack(out).cpu().numpy()
 
 # %% [markdown]
 # ## 5. Preprocess and predict, chunk by chunk
@@ -282,7 +338,7 @@ for c in range(0, len(studies), CHUNK):
             idx = np.where(keep)[0][b:b + 8]
             p = predict_batch(torch.from_numpy(X[idx]), torch.from_numpy(RM[idx]))
             for k, i in enumerate(idx):
-                preds[chunk[i]] = dict(zip(LABELS, p[k].tolist()))
+                preds[chunk[i]] = p[:, k]                         # (groups, findings)
     except Exception:
         traceback.print_exc()
     done = min(c + CHUNK, len(studies)); el = time.time() - t0
@@ -299,7 +355,7 @@ print(f"predicted {len(preds)}/{len(studies)} studies in {(time.time() - t0) / 6
 # - **Role success rate:** share of test studies where each series type could be read.
 # - **Errors by type and transfer syntax:** decoding errors concentrated on one compression mean the decoder wheels are
 #   missing or broken; "no … series" means the study simply has no such series (normal, the model handles missing ones).
-# - Studies without any usable series got the prior.
+# - Studies without any usable series got the prior (with several model groups: the middle rank, 0.5).
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
 if len(meta_df):
@@ -321,7 +377,8 @@ print("studies falling back to the prior:", len(studies) - len(preds))
 # %% [code] {"jupyter":{"outputs_hidden":false}}
 sub = make_submission(preds)
 validate_and_write(sub)
-print(f"total runtime {(time.time() - T_START) / 60:.1f} min | models {len(models)} | TTA {USE_TTA}")
+print(f"total runtime {(time.time() - T_START) / 60:.1f} min | models " +
+      ", ".join(f"{g['name']}: {len(g['models'])}" for g in GROUPS) + f" | TTA {USE_TTA}")
 sub.head()
 
 # %% [markdown]
@@ -331,5 +388,6 @@ sub.head()
 # 2. **Save Version → Save & Run All**. The interactive/commit run only sees the 3 example test studies, so it finishes in
 #    a few minutes; check that sections 5–6 show predictions and no errors.
 # 3. Competition page → **Submit Prediction** → this notebook/version.
-# 4. When more folds are trained, add their `model_fold*.pt` to the `knee-models` dataset (new version), update the input
-#    here to the new version, and submit again: the notebook automatically uses every fold it finds.
+# 4. To blend model groups, attach several model datasets (for example `knee-models` and `knee-models-v4`): each one
+#    with a `train_config.json` becomes a group, and section 2 prints the weights that are used. Attach only the groups
+#    you want in the submission.
