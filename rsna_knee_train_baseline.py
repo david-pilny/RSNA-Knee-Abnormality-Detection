@@ -1,13 +1,13 @@
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # # RSNA Knee: baseline training (images → 12 findings)
-#
+# #
 # This notebook trains the model that will eventually be submitted. It brings together the two datasets we built:
-#
+# #
 # | Input dataset | Gives | Role |
 # |---|---|---|
-# | `knee-report-labels` → `labels_v3.csv` | 12 soft labels per study (0 / 0.5 / 1, NaN where unknown) | **y** |
+# | `knee-report-labels` → `labels_v4.csv` | 12 soft labels per study (0 / 0.5 / 1, NaN where unknown) | **y** |
 # | `knee-mri-cache` → shards + `knee_preproc.py` | 3 preprocessed series per study, 24 × 224 × 224, uint8 | **X** |
-#
+# #
 # **The model in one picture (2.5D, multi-view):**
 # ```
 #  sag_fs (24 slices) ─► 8 "RGB" images of 3 neighbouring slices ─┐
@@ -18,17 +18,17 @@
 #                                                                          ▼
 #                          3 series vectors (missing series → masked) → concatenate → MLP → 12 logits
 # ```
-#
+# #
 # **Validation:** the 58 **gold** studies are never trained on. They are our cleanest estimate of the leaderboard score,
 # because the test labels are presumably made the same way as gold. Besides that, a 5-fold split of the report-labelled
 # studies, grouped by a site proxy, is used for model selection.
-#
+# #
 # **Settings:** Accelerator **GPU T4 ×2**, Internet **on** (downloads the pretrained backbone once). One fold takes roughly
 # 40–60 min; the notebook prints the measured time per epoch after the first one.
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 1. Settings
-#
+# #
 # Start with `FOLDS_TO_RUN = [0]`: one fold is enough to see whether everything works and how good the baseline is. When
 # it is, run the remaining folds (possibly in separate sessions: every fold saves its own weights).
 
@@ -50,7 +50,7 @@ CFG = dict(
     batch_size=8,              # studies per step (each = 3 series × 8 images)
     lr=3e-4, weight_decay=1e-2, warmup_epochs=1,
     n_folds=5,
-    folds_to_run=[0],
+    folds_to_run=[0, 1, 2, 3, 4],
     num_workers=4,
     preload=True,              # load the whole cache into RAM once (fast training); falls back to disk if RAM is short
     log_every=50,              # print progress every N training steps
@@ -70,9 +70,9 @@ def seed_all(s):
 seed_all(CFG["seed"])
 print(json.dumps(CFG, indent=1), "\ndevice:", DEVICE, "| GPUs:", N_GPU)
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 2. Find the two datasets
-#
+# #
 # Kaggle mounts attached datasets somewhere under `/kaggle/input`, and the exact path depends on your username and the
 # dataset name. Instead of hard-coding it, we search (shallowly, skipping the huge competition folder) for the two files that
 # identify them: `labels_v3.csv` and `cache/index.csv`.
@@ -99,7 +99,7 @@ def find(name, base="/kaggle/input", max_depth=6):
         frontier = nxt
     raise FileNotFoundError(f"{name} not found under {base}: is the dataset attached?")
 
-LABELS_CSV = find("labels_v3.csv")
+LABELS_CSV = find("labels_v4.csv")
 CACHE_DIR = find("index.csv").parent
 sys.path.insert(0, str(CACHE_DIR.parent))          # knee_preproc.py sits next to the cache folder
 sys.dont_write_bytecode = True
@@ -107,9 +107,9 @@ import knee_preproc as kp
 print("labels:", LABELS_CSV)
 print("cache :", CACHE_DIR, "| module:", kp.__file__)
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 3. Put labels and images together
-#
+# #
 # - **Training pool:** report-labelled studies that have at least one cached series and at least one known label.
 #   Unknown labels (NaN, from parse errors) are **masked** in the loss, so a study with 11 of 12 labels still counts.
 # - **Gold hold-out:** the 58 gold studies, used only for evaluation.
@@ -162,9 +162,9 @@ pool.site.value_counts().head(20).plot.bar(ax=axes[1], color="#4a7ab5"); axes[1]
 axes[1].tick_params(axis="x", rotation=60, labelsize=8)
 plt.tight_layout(); plt.show()
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 4. Dataset: from cache to tensors
-#
+# #
 # Each item is one study: a `uint8` tensor `(3 roles, 24 slices, 224, 224)`, a role mask (which series exist), the 12
 # targets and the 12-label mask. Everything else (choosing slice triplets, augmentation, normalisation) happens on the GPU
 # in section 5, which is much faster than doing it per item on the CPU.
@@ -201,9 +201,9 @@ RAM, ROW, RMASK = None, None, None
 t0 = time.time(); item = KneeDS(pool.head(4))[0]
 print("one item from disk:", [tuple(t.shape) for t in item], f"| {1000 * (time.time() - t0):.0f} ms to load")
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ### Load the whole cache into RAM
-#
+# #
 # The first version read every study from the compressed shards on disk during training. That costs ~140 ms per study,
 # and with ~3,400 studies per epoch the GPUs spent most of their time waiting for data. Instead, all studies are now
 # decompressed **once** into one big array in memory (≈ 16 GB for ~4,400 studies; Kaggle GPU sessions have ~29 GB),
@@ -251,13 +251,13 @@ else:
 t0 = time.time(); item = KneeDS(pool.head(4))[0]
 print("one item now:", f"{1000 * (time.time() - t0):.1f} ms to load")
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 5. GPU-side preprocessing and augmentation
-#
+# #
 # **Slice triplets.** From the 24 slices, 8 centre positions are spread evenly; each image is the centre slice with its two
 # neighbours as the 3 colour channels. The CNN was pretrained on RGB photos, and three neighbouring slices give it a bit of
 # 3D context for free. During training the centres jitter by ±1 slice.
-#
+# #
 # **Augmentations (training only):**
 # - small random rotation / zoom / shift, the same for all slices of a series;
 # - brightness, contrast and gamma jitter per series (scanners differ);
@@ -322,9 +322,9 @@ for row, train in enumerate([False, True]):
         axes[row, j].set_title(f"{role} {'augmented' if train else 'plain'}"); axes[row, j].axis("off")
 plt.tight_layout(); plt.show()
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 6. The model
-#
+# #
 # - **Backbone:** a timm CNN (`efficientnet_b0` by default: small and fast on T4), shared by all series and slices.
 #   It turns each 3-slice image into one feature vector.
 # - **Attention pooling:** learns which of the 8 images of a series matter (e.g. the ones through the ACL) and averages
@@ -367,9 +367,9 @@ m = KneeNet(CFG["backbone"], CFG["pretrained"], len(CFG["roles"]))
 print(f"{CFG['backbone']}: {sum(p.numel() for p in m.parameters()) / 1e6:.1f} M parameters")
 del m
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 7. Loss and metrics
-#
+# #
 # - **Loss:** binary cross-entropy against the **soft** labels, averaged only over known labels (`ymask`). A soft label of
 #   0.5 ("uncertain") teaches the model to be unsure there, instead of forcing a guess.
 # - **Validation AUC (report labels):** labels > 0.5 count as positive, < 0.5 as negative; 0.5 and NaN are skipped.
@@ -403,16 +403,16 @@ def predict(model, frame):
         preds.append(torch.sigmoid(logits.float()).cpu().numpy())
     return np.concatenate(preds)
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 8. One GPU, channels_last (what the speed diagnostic showed)
-#
+# #
 # The diagnostic notebook measured, on a T4:
-#
+# #
 # | Setup | Result |
 # |---|---|
 # | 1 GPU, 8 studies per step, `channels_last`, fp16 | **0.39 s/step** (healthy) |
 # | 2 GPUs with `DataParallel` | **7.5 s/step**, and with `channels_last` it **crashes** (`CUDA error: misaligned address`) |
-#
+# #
 # So `DataParallel` was the problem all along: it made every step ~20× slower in this PyTorch version, and it is the common
 # factor of all the runs whose kernel died. Training now uses **one GPU** with `channels_last`. Expected: ~3 min per epoch,
 # ~30–35 min per fold. (The second T4 stays idle; using it properly would mean training two folds in parallel processes,
@@ -431,9 +431,9 @@ def build_net(use_dp=False):
 steps_per_epoch = (len(pool) * (CFG["n_folds"] - 1) // CFG["n_folds"]) // CFG["batch_size"]
 print(f"{steps_per_epoch} steps per epoch → ≈ {steps_per_epoch * 0.4 / 60:.0f} min per epoch at the measured 0.4 s/step")
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 9. Training loop
-#
+# #
 # Per fold: AdamW, one warm-up epoch, then cosine decay; mixed precision (fp16) for speed on T4; one GPU (see section 8).
 # After every epoch: validation loss and AUC on the held-out fold. The weights with the best validation
 # macro AUC are saved as `model_fold{k}.pt`.
@@ -493,12 +493,12 @@ axes[0].set_title("training loss"); axes[1].set_title("validation macro AUC (rep
 for a in axes: a.set_xlabel("epoch"); a.legend()
 plt.tight_layout(); plt.show()
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 10. Evaluation: validation fold and gold hold-out
-#
+# #
 # For every trained fold we reload the best weights and predict (a) its validation fold and (b) the 58 gold studies.
 # The gold predictions of all trained folds are averaged (an ensemble), which is exactly what the submission will do.
-#
+# #
 # **How to read it:** the gold macro AUC is the number to watch between experiments. Validation AUC on report labels is
 # useful too (much more data), but it partly measures agreement with the labeller's mistakes.
 
@@ -531,15 +531,15 @@ ax.tick_params(axis="x", rotation=45); plt.tight_layout(); plt.show()
 pd.concat(oof).to_csv(OUT_DIR / "oof_predictions.csv", index=False)
 pd.DataFrame(gold_ens, columns=LABELS).assign(StudyInstanceUID=gold_df.StudyInstanceUID.values).to_csv(OUT_DIR / "gold_predictions.csv", index=False)
 
-# %% [markdown]
+# %% [markdown] {"jupyter":{"outputs_hidden":false}}
 # ## 11. Save everything the submission needs
-#
+# #
 # The submission notebook runs offline, so it gets the model from this notebook's output (saved as a dataset, e.g.
 # `knee-models`):
 # - `model_fold*.pt`: weights (fp16, a few MB each for efficientnet_b0),
 # - `train_config.json`: backbone, roles, triplets, image size. The submission rebuilds the exact same model from it,
 #   with `pretrained=False` (no download needed, the weights come from the `.pt` file).
-#
+# #
 # **Next:** save this version's output as a dataset → build the real submission notebook, which runs `knee_preproc` on the
 # hidden test DICOMs, feeds the model, averages the folds and writes `submission.csv`.
 
