@@ -1,5 +1,11 @@
 # Decision: what to do after 0.906
 
+**Outcome (5 Oct 2026):** David chose option A. The forked public notebook scores **0.943** on its own; our v3/v4 member
+blended in at weight 0.25 also gives 0.943, at weight 0.4 it gives 0.936. So our member currently adds nothing. The next
+decision (make the member much stronger via resolution, or stop and pick final submissions) is described in `CLAUDE.md` §7.
+
+---
+
 Written 2 Oct 2026, after the v3 + v4 blend submission. This is the assistant's message from that evening, kept as written.
 Background and all numbers are in `CLAUDE.md` (§6.5 results, §6.6 public notebooks).
 

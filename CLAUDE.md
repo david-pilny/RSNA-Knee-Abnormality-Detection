@@ -1,9 +1,10 @@
 # CLAUDE.md: RSNA Knee Abnormality Detection (Kaggle 2026)
 
-Hand-off notes for continuing this project in a new session. Last updated **2 Oct 2026**.
+Hand-off notes for continuing this project in a new session. Last updated **5 Oct 2026**.
 
-**Open decision:** see `DECISION.md` (start from the public 0.94 notebook, or keep improving our own pipeline). David decides;
-don't start either path before he has answered.
+**Where we are:** David chose to build on the public 0.94 notebook (`DECISION.md` records the decision and its outcome). The fork
+alone scores **0.943**; our own models add nothing to it at the moment (§6.5, §7). Next step is to decide whether to make our
+member much stronger (resolution) or to stop and pick the final submissions.
 
 ---
 
@@ -25,7 +26,8 @@ don't start either path before he has answered.
   that compartment; Effusion and Baker's: moderate or large only; Contusion: impact marrow edema without a fracture line;
   Fracture: acute cortical break / fracture line. Gold is ~3× enriched in positives compared with the corpus.
 - **Deadlines:** entry / team merge **15 Oct 2026**, final submission **22 Oct 2026**. Kaggle lets you pick 2 final submissions.
-- **Leaderboard (2 Oct):** our best **0.906** public (v3 + v4 blend; see §6.5). Top of LB 0.961, 0.954+ is private work.
+- **Leaderboard (5 Oct):** our best **0.943** public = the forked public notebook, with or without our member (§6.5). Our own
+  pipeline alone: 0.906. Top of LB 0.961, 0.954+ is private work.
   The LB is crowded at ~0.94 because the **public notebooks are forks of one inference notebook with published weights**
   (§6.6). Rank at 0.882 was 3,239 / 4,750; not re-checked since.
 
@@ -189,6 +191,13 @@ Local copies (numbers only, git-ignored `data/`): `labels_v3.csv`, `labels_v4.cs
 | v3 labels, 5 folds | 0.876 | 0.889 |
 | v4 labels, 5 folds | 0.884 | **0.905** |
 | v3 + v4 rank blend (v3 off for ACL / MCL / PF OA) | 0.896 | **0.906** |
+| forked public notebook, unchanged (our cell with `OUR_WEIGHT = 0`) | – | **0.943** |
+| fork + our v3/v4 blend as extra member, `OUR_WEIGHT = 0.25` | – | 0.943 |
+| fork + our member, `OUR_WEIGHT = 0.4` | – | 0.936 |
+
+**Our member adds nothing to the public ensemble**: neutral at weight 0.25, harmful at 0.4. A 0.906 model that is only partly
+decorrelated from a 0.943 ensemble is not strong enough to help; it would need to be around 0.92+ on its own (a single
+public CoAtNet is 0.914) and different in input to pay off.
 
 Gold AUC per finding, five-fold ensembles, v3 → v4 labels: ACL 0.887 → 0.934, MCL 0.810 → 0.887, Medial Meniscus
 0.909 → 0.900, Lateral Meniscus 0.778 → 0.784, Medial OA 0.966 → 0.977, Lateral OA 0.818 → 0.820, PF OA 0.799 → 0.900,
@@ -202,10 +211,24 @@ Effusion 0.952 → 0.955, Synovitis 0.740 → 0.711, Baker's 0.976 → 0.980, Co
 - Gold noise: macro SE ≈ 0.02, one finding ≈ 0.05–0.09. Paired bootstrap, equal v3 + v4 blend minus v4: +0.004, 90 % CI
   [−0.005, +0.014]; the leaderboard gave +0.001.
 
-### 6.6 What the public notebooks are (researched 2 Oct via public GitHub write-ups)
+### 6.6 Our member cell for the public notebook (`rsna_knee_public_member_cell.py`)
+- Goes into the fork of `mattiaangeli/bend-the-knee-to-speedy-raptors-the-original` as a code cell directly before its last
+  (publish) cell. The plain code is also in `public/our_member_cell_code.py`; the downloaded fork is `public/bend-the-knee.ipynb`.
+- Mechanics: the public notebook keeps rank-percentile predictions in `/kaggle/working/_pipeline_stage.csv` and publishes
+  `submission.csv` in its last cell after integrity gates. Our cell backs the staged file up, runs our pipeline (same code as
+  §6.4, both model groups, mirror TTA, rank blend), blends our ranks in with `OUR_WEIGHT`, re-ranks, writes the staged file
+  back; any exception or the time limit (`OUR_TIME_LIMIT_H = 1.5`, or 20 min before the public `TIME_BUDGET`) restores the
+  backup. It reads only `ROOT`, `T0`, `TIME_BUDGET` from the public notebook, all optional. Tested with a local harness
+  (fake staged file + fake DICOMs): normal, weight 0, time-out, failure.
+- Attach to the fork: `knee-models` (v4), `knee-models-v3`, `knee-mri-cache`, `knee-dicom-wheels`. The commit run takes ~8 min
+  (3 studies, mostly model loading); **scoring a submission takes ~6 h** before a result or error appears.
+- Two runs failed because a stray one-line cell containing `[code]` sat before our cell (a paste accident); check the cell
+  list before committing.
+
+### 6.7 What the public notebooks are (researched 2 Oct via public GitHub write-ups)
 - Kaggle's own pages are JS-rendered and not readable by WebFetch; no Kaggle API token on this Mac.
 - The ~0.94 band = forks of one inference notebook with ~13 public datasets of trained weights. Reference:
-  `mattiaangeli/bend-the-knee-to-speedy-raptors-the-original` (0.940); public ceiling 0.941–0.943.
+  `mattiaangeli/bend-the-knee-to-speedy-raptors-the-original` (its current version scores 0.943 for us); public ceiling 0.941–0.943.
 - Core model: **CoAtNet-RMLP-2, 2.5D attention-MIL, 336–384 px, 44–64 slices over 5 plane×contrast slots** ("Raptor"
   checkpoints by `dreaddevelopment`): ~0.914 LB and 0.91–0.92 on gold per checkpoint; a CoAtNet-only pipeline scored 0.939
   in ~3 h. DINOv2 (0.84) and RadImageNet ResNet50 (0.85) arms add diversity only.
@@ -220,15 +243,20 @@ Effusion 0.952 → 0.955, Synovitis 0.740 → 0.711, Baker's 0.976 → 0.980, Co
 
 ## 7. Next steps
 
-1. **David decides between the two options in `DECISION.md`:** (A) Copy & Edit the public 0.94 notebook and append our v4
-   models as an extra member, or (B) stay with our own pipeline and raise the effective image resolution. My recommendation
-   is A as the base and B as the experiment that makes our member stronger and more different.
-2. For B, first experiment: a centre-cropped cache (same 24 × 224 × 224 shape, joint fills the frame) → five folds or fold 0
-   on v4 labels → compare gold per finding (menisci, lateral OA). Then higher resolution / more series / larger backbone;
-   the 15.9 GB RAM preload limits what fits (288 px × 3 roles would need ~26 GB).
-3. Cheap label follow-ups, only if a labeller rerun is planned anyway: loosen the MCL wording; verify the thresholds against
-   the Kaggle overview. Label values can be recomputed offline from `llm_probs_v4.csv` without the LLM.
-4. Final week: runtime check, choose 2 final submissions. Don't tune to the public LB.
+**Decision for David (not yet taken):** with 17 days left, either
+- **(a) make our member strong enough to matter** — the only remaining route to beat 0.943 with our own work. Judge it on our
+  own-pipeline leaderboard score first: it needs roughly 0.92+ alone before it can help the public ensemble. Steps, in order:
+  centre-cropped cache (same 24 × 224 × 224 shape, joint fills the frame; CPU only, ~1.5 h) → five folds on v4 labels
+  (2.7 GPU h) → own submission; then higher resolution / more series / larger backbone if the crop helps. RAM limit: the
+  training preload holds 15.9 GB at 224 px; 288 px × 3 roles would need ~26 GB of the ~32 GB.
+- **(b) stop here** and choose the final two submissions: the unchanged fork (0.943) and the 0.25 variant (equal score, a
+  hedge that differs slightly). Don't tune `OUR_WEIGHT` further; the public LB cannot resolve it and that is how forks overfit.
+
+Other open items:
+- Verify the host label thresholds against the Kaggle overview page (§1) — still unchecked.
+- `rsna_knee_report_labeler_v4.py` MCL wording is too strict; only relevant if a labeller rerun happens.
+- GPU quota: the labeller and two five-fold runs used most of one week; check what is left before planning (a).
+- Final week: runtime check of the chosen submissions; pick 2 final submissions on Kaggle before 22 Oct.
 
 ## 8. Lessons learned (avoid repeating)
 
@@ -242,5 +270,8 @@ Effusion 0.952 → 0.955, Synovitis 0.740 → 0.711, Baker's 0.976 → 0.980, Co
 - With a model split over two GPUs, `model(...)` returns its output on the first GPU while the output layer sits on the
   last: keep index tensors on the CPU. After an out-of-memory error, free and retry **outside** the `except` block.
 - Blending two models that share architecture and images gives almost nothing (+0.001 LB), however different the labels.
+- A 0.906 model adds nothing to a 0.943 ensemble (neutral at weight 0.25, −0.007 at 0.4): an extra member must be close to
+  the ensemble's strength and different in input to help.
+- Submitting a version whose commit run failed wastes a submission: the scoring run fails too, but only after ~6 h.
 - With 58 gold studies, per-finding differences below ~0.05 and macro differences below ~0.02 are noise; use out-of-fold
   predictions on the 4,349 report-labelled studies for a second opinion.
