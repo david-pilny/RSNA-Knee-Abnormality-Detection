@@ -47,7 +47,7 @@ RAISE_IF_DECODE_FAIL = None   # e.g. 0.05: in the scoring run, fail on purpose i
 # Weight of a model group for a finding (default 1 for everything not listed). A group is named after the label file it
 # was trained on. The v3 labels used the wrong definitions for ACL, MCL and PF OA, so the v3 models are left out there.
 # Ignored when only one group is attached. {} = equal weights everywhere.
-BLEND_WEIGHTS = {"labels_v3": {"ACL": 0, "MCL": 0, "PF OA": 0}}
+BLEND_WEIGHTS = {}           # e.g. {"labels_v3": {"ACL": 0}}: per-group, per-finding weights (default 1)
 
 OUT_DIR = Path(os.environ.get("OUT_DIR", "/kaggle/working"))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -83,7 +83,7 @@ for d in sorted(find_dirs_with("train_config.json", skip={ROOT})):
     files = sorted(d.glob("model_fold*.pt"))
     if not files:
         continue
-    name = str(cfg.get("labels_file", d.name)).rsplit(".", 1)[0]
+    name = cfg.get("group_name") or str(cfg.get("labels_file", d.name)).rsplit(".", 1)[0]
     if any(g["name"] == name for g in GROUPS):                # two groups trained on the same labels: add the folder name
         name = f"{name}@{d.name}"
     GROUPS.append({"name": name, "dir": d, "cfg": cfg, "files": files})
@@ -213,7 +213,7 @@ for mod in ["pylibjpeg", "libjpeg", "openjpeg"]:
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 sys.path.insert(0, str(PREPROC_DIR))
-os.environ["PYTHONPATH"] = f"{PREPROC_DIR}:{os.environ.get('PYTHONPATH', '')}"   # for the parallel workers
+os.environ["PYTHONPATH"] = str(PREPROC_DIR) + os.pathsep + os.environ.get("PYTHONPATH", "")   # for the parallel workers
 import knee_preproc as kp
 
 import torch, torch.nn as nn, timm

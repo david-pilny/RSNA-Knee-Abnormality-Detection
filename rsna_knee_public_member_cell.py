@@ -17,8 +17,8 @@
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
 OUR_WEIGHT = 0.25            # share of our member in the final blend (0 = switch our member off)
-OUR_TIME_LIMIT_H = 1.5       # our part stops after this many hours; studies not reached keep the public prediction
-OUR_BLEND_WEIGHTS = {"labels_v3": {"ACL": 0, "MCL": 0, "PF OA": 0}}   # inside our member, as in our own submission
+OUR_TIME_LIMIT_H = 2.0       # our part stops after this many hours; studies not reached keep the public prediction
+OUR_BLEND_WEIGHTS = {}       # inside our member, per group and finding (default 1), e.g. {"v5_b0": {"ACL": 0}}
 OUR_CHUNK = 32
 
 import os, sys, time, json, shutil, subprocess, traceback
@@ -72,7 +72,7 @@ def our_member():
     for d in sorted(find_dirs_with("train_config.json", skip={root})):
         cfg, files = json.loads((d / "train_config.json").read_text()), sorted(d.glob("model_fold*.pt"))
         if files:
-            groups.append({"name": str(cfg.get("labels_file", d.name)).rsplit(".", 1)[0], "cfg": cfg, "files": files})
+            groups.append({"name": cfg.get("group_name") or str(cfg.get("labels_file", d.name)).rsplit(".", 1)[0], "cfg": cfg, "files": files})
     assert groups, "no model datasets (train_config.json + model_fold*.pt) attached"
     for g in groups:
         assert g["cfg"]["labels"] == LABELS and g["cfg"].get("depth", cache_cfg["DEPTH"]) == cache_cfg["DEPTH"]
@@ -94,22 +94,29 @@ def our_member():
                 kids = list(d.iterdir())
             except OSError:
                 continue
-            if any(k.suffix == ".whl" for k in kids):
-                wheel_dirs.append(str(d))
+            if any(k.suffix == ".whl" and k.name.lower().startswith("pylibjpeg") for k in kids):
+                wheel_dirs.append(str(d))                  # only folders with OUR decoder wheels (the fork has others)
             nxt += [k for k in kids if k.is_dir()]
         frontier = nxt
-    if wheel_dirs:
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "--no-index", "--find-links", wheel_dirs[0], "-q",
+    import importlib, importlib.util
+    mods = ["pylibjpeg", "libjpeg", "openjpeg"]
+    if all(importlib.util.find_spec(m) for m in mods):
+        _our_log("decoder modules already installed")
+    elif wheel_dirs:
+        links = [a for d in wheel_dirs for a in ("--find-links", d)]
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "--no-index", *links, "-q",
                             "pylibjpeg", "pylibjpeg-libjpeg", "pylibjpeg-openjpeg"], capture_output=True, text=True)
-        _our_log("decoder wheels: " + ("installed" if r.returncode == 0 else "install failed: " + r.stderr[-200:]))
+        importlib.invalidate_caches()
+        _our_log(f"decoder wheels from {wheel_dirs}: " + ("installed" if r.returncode == 0 else "install failed: " + r.stderr[-200:]))
     else:
-        _our_log("no decoder wheels found: compressed DICOMs may fail (those studies keep the public prediction)")
+        _our_log("no pylibjpeg wheels found: compressed DICOMs may fail (those studies keep the public prediction)")
+    _our_log("decoders: " + ", ".join(f"{m} {'ok' if importlib.util.find_spec(m) else 'MISSING'}" for m in mods))
 
     sys.dont_write_bytecode = True
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     if str(preproc_dir) not in sys.path:
         sys.path.insert(0, str(preproc_dir))
-    os.environ["PYTHONPATH"] = f"{preproc_dir}:{os.environ.get('PYTHONPATH', '')}"
+    os.environ["PYTHONPATH"] = str(preproc_dir) + os.pathsep + os.environ.get("PYTHONPATH", "")
     import knee_preproc as kp
     import torch, torch.nn as nn, timm
     from joblib import Parallel, delayed

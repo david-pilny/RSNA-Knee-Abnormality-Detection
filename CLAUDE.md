@@ -3,8 +3,8 @@
 Hand-off notes for continuing this project in a new session. Last updated **5 Oct 2026**.
 
 **Where we are:** David chose to build on the public 0.94 notebook (`DECISION.md` records the decision and its outcome). The fork
-alone scores **0.943**; our own models add nothing to it at the moment (§6.5, §7). Next step is to decide whether to make our
-member much stronger (resolution) or to stop and pick the final submissions.
+alone scores **0.943**; our own models add nothing to it at the moment (§6.5). **5 Oct: decided to make our member much stronger
+(v5 cache + v5 training on both GPUs, §7).**
 
 ---
 
@@ -194,6 +194,9 @@ Local copies (numbers only, git-ignored `data/`): `labels_v3.csv`, `labels_v4.cs
 | forked public notebook, unchanged (our cell with `OUR_WEIGHT = 0`) | – | **0.943** |
 | fork + our v3/v4 blend as extra member, `OUR_WEIGHT = 0.25` | – | 0.943 |
 | fork + our member, `OUR_WEIGHT = 0.4` | – | 0.936 |
+| **v5: cropped 256 px, B0 + ConvNeXt-Nano, 5 folds each, rank blend** | B0 0.904, CNXN 0.903 (training log) | **0.918** |
+| fork + v5 member, `OUR_WEIGHT = 0.25` | – | 0.943 |
+| fork + v5 member, `OUR_WEIGHT = 0.4` | – | 0.939 |
 
 **Our member adds nothing to the public ensemble**: neutral at weight 0.25, harmful at 0.4. A 0.906 model that is only partly
 decorrelated from a 0.943 ensemble is not strong enough to help; it would need to be around 0.92+ on its own (a single
@@ -243,7 +246,33 @@ Effusion 0.952 → 0.955, Synovitis 0.740 → 0.711, Baker's 0.976 → 0.980, Co
 
 ## 7. Next steps
 
-**Decision for David (not yet taken):** with 17 days left, either
+**Decided 5 Oct: option (a), go all in on our own member** (30 GPU h left this week), then blend it into the fork the same
+way as before (§6.6). Files for it (tested locally on fake data, Windows `.venv` now set up with `uv`):
+- `rsna_knee_preprocess_cache_v5.py` → dataset **`knee-mri-cache-v5`**: knee cropped to a fixed 140 mm window (centre of the
+  tissue box on the slice-average), 256 px (0.55 mm/px), anti-aliased resize; `tissue_outside` per series in `index.csv`.
+  `IMG` / `CROP_MM` env-overridable; if the size estimate exceeds 18 GB, rerun with `IMG=240`. Crop test: `tests/test_preproc_v5_crop.py`.
+- `rsna_knee_train_v5.py` → dataset `knee-models-v5`: unpacks the cache once into `X.npy` on local disk (memmap), runs
+  **jobs** (`{name, fold, overrides}`) as separate processes, **one per GPU, both T4s busy**; a `bench` job times backbones.
+  Every `name` is one group folder with `train_config.json` (incl. `group_name`, `crop_mm`), oof/gold predictions (mirror TTA).
+  Fake inputs: `tests/make_fake_cache.py`.
+- Submission and member cell now name groups by `group_name`; `BLEND_WEIGHTS` / `OUR_BLEND_WEIGHTS` default to `{}`.
+  A v5 submission attaches `knee-mri-cache-v5` (not the old cache) + the v5 model dataset; old 224 px groups can't be mixed in.
+
+**Session 1 result (5 Oct, 1.2 GPU h; the v5 cache was saved as a new *version* of `knee-mri-cache`, not a new dataset;
+old 224 px notebooks must pin the older version):** fold 0, mirror TTA. B0 (44 min/fold, 0.53 s/step): val 0.861,
+gold 0.886 (single model = old five-fold v4 ensemble; Lateral Meniscus 0.784 → 0.876). ConvNeXt-Nano (62 min/fold):
+val 0.857, gold 0.898, still improving at epoch 10. **Rank blend of the two single models: gold 0.903** (old best 0.896).
+Bench at 256 px (s/step): B0 0.52; B2 1.01, ConvNeXt-Tiny 1.29 and EffNetV2-S 1.23 only with grad checkpointing.
+**Own v5 submission: 0.918 public** (commit run 1.3 min for 3 studies; `kaggle_upload/*.ipynb` built by `tests/make_kaggle_ipynb.py`, imported with File → Import Notebook; detach `knee-models-v3`, the shape check stops on 224 px groups). Member cell: `OUR_TIME_LIMIT_H = 2.0`; harness `tests/test_member_cell.py`. Next: fork + v5 member at 0.25 and 0.4.
+Session 2: folds 1–4 of both groups; fold 0 reused from the attached session-1 output (reuse step in section 6 copies
+fold files when group name + settings match).
+
+Plan: (1) CPU: build `knee-mri-cache-v5` (~1.5–2 h). (2) GPU session 1: bench + B0 fold 0 + ConvNeXt-Nano fold 0 in parallel;
+compare fold-0 val AUC with the old 224 px v4 B0 fold 0 (same folds). (3) Winner × 5 folds (~3 rounds on 2 GPUs).
+(4) Own submission alone; it needs ~0.92 before the fork blend can help. (5) Fork + member at 0.25.
+Further levers if time allows: larger backbone, more epochs, a 4th series (sagittal non-fat-sat PD for menisci).
+
+**Old decision text (5 Oct, before choosing):** with 17 days left, either
 - **(a) make our member strong enough to matter** — the only remaining route to beat 0.943 with our own work. Judge it on our
   own-pipeline leaderboard score first: it needs roughly 0.92+ alone before it can help the public ensemble. Steps, in order:
   centre-cropped cache (same 24 × 224 × 224 shape, joint fills the frame; CPU only, ~1.5 h) → five folds on v4 labels
