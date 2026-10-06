@@ -12,6 +12,11 @@
 #
 # Output dataset name: **`knee-mri-cache-v5`** (a new dataset: the 224 px models still need the old one).
 #
+# **Second setting (6 Oct): 320 px, 130 mm window, in two parts.** 320 px would exceed Kaggle's 20 GB output limit in one
+# run, so the studies are split: run this notebook twice, with `PART = "1/2"` and `PART = "2/2"` (two copies of the
+# notebook can run at the same time; CPU only). Save the outputs as two **new** datasets, `knee-mri-cache-320a` and
+# `knee-mri-cache-320b`. Training attaches both and joins them.
+#
 # ```
 # DICOM folders (≈100k files, mixed sizes, orientations, compression)
 #        │  pick the right series per study  →  load + sort slices  →  canonical orientation
@@ -46,8 +51,10 @@ ROLES = {                       # role name: (plane, fluid-sensitive wanted?)
     "cor_fs": ("Coronal", 1),   # MCL, meniscal bodies, medial/lateral OA
     "ax_fs":  ("Axial", 1),     # patellofemoral OA, synovitis, Baker's cyst, effusion
 }
-DEPTH, IMG = 24, int(os.environ.get("IMG", 256))
-CROP_MM = float(os.environ.get("CROP_MM", 140))   # in-plane window around the knee, millimetres (0 = whole field of view)
+DEPTH, IMG = 24, int(os.environ.get("IMG", 320))
+CROP_MM = float(os.environ.get("CROP_MM", 130))   # in-plane window around the knee, millimetres (0 = whole field of view)
+PART = os.environ.get("PART", "1/2")   # "k/n": this notebook makes part k of n (every n-th study); n = 2 keeps each part
+                                      # under Kaggle's 20 GB output limit at 320 px. "1/1" = everything in one run
 SHARD_SIZE = 100
 LIMIT = None
 SIZE_LIMIT_GB = 18              # stop before exceeding Kaggle's 20 GB output limit
@@ -301,6 +308,9 @@ print("wrote and imported", OUT_DIR / "knee_preproc.py")
 train = pd.read_csv(ROOT / "train.csv", usecols=["StudyInstanceUID"])
 series = pd.read_csv(ROOT / "train_series.csv")
 studies = train.StudyInstanceUID.tolist()[:LIMIT] if LIMIT else train.StudyInstanceUID.tolist()
+PART_K, PART_N = (int(x) for x in PART.split("/"))
+studies = studies[PART_K - 1::PART_N]
+print(f"part {PART_K} of {PART_N}: {len(studies)} studies")
 print(f"studies to process: {len(studies)} | series in CSV: {len(series)}")
 
 avail = []
@@ -385,13 +395,13 @@ plt.tight_layout(); plt.show()
 # Shards that already exist are skipped, so an interrupted interactive run can continue.
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
-assert est_gb < SIZE_LIMIT_GB, f"estimated {est_gb:.1f} GB > {SIZE_LIMIT_GB} GB: set IMG = 240 (or 224) and rerun"
+assert est_gb < SIZE_LIMIT_GB, f"estimated {est_gb:.1f} GB > {SIZE_LIMIT_GB} GB: split into more parts (PART = \"1/3\", \"2/3\", \"3/3\") and rerun"
 
 all_meta, t0 = [], time.time()
 shards = [studies[i:i + SHARD_SIZE] for i in range(0, len(studies), SHARD_SIZE)]
 for n, chunk in enumerate(shards):
-    name = f"shard_{n:03d}.npz"
-    meta_path = CACHE_DIR / f"meta_{n:03d}.csv"
+    name = f"shard_p{PART_K}_{n:03d}.npz"
+    meta_path = CACHE_DIR / f"meta_p{PART_K}_{n:03d}.csv"
     if (CACHE_DIR / name).exists() and meta_path.exists():
         all_meta.append(pd.read_csv(meta_path)); continue
     res = Parallel(n_jobs=N_JOBS)(delayed(run)(s) for s in chunk)
@@ -480,6 +490,6 @@ print("output files:", len(list(OUT_DIR.rglob("*"))), "(Kaggle limit: 500)")
 # Settings used for this cache (write them down; training and submission must match):
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
-config = {"ROLES": ROLES, "DEPTH": DEPTH, "IMG": IMG, "CROP_MM": CROP_MM, "SHARD_SIZE": SHARD_SIZE, "studies": len(studies)}
+config = {"ROLES": ROLES, "DEPTH": DEPTH, "IMG": IMG, "CROP_MM": CROP_MM, "PART": PART, "SHARD_SIZE": SHARD_SIZE, "studies": len(studies)}
 (CACHE_DIR / "config.json").write_text(json.dumps(config, indent=1))
 print(json.dumps(config, indent=1))

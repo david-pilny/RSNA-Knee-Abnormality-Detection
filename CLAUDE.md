@@ -267,6 +267,9 @@ Bench at 256 px (s/step): B0 0.52; B2 1.01, ConvNeXt-Tiny 1.29 and EffNetV2-S 1.
 Session 2: folds 1–4 of both groups; fold 0 reused from the attached session-1 output (reuse step in section 6 copies
 fold files when group name + settings match).
 
+**6 Oct, plan A (one more shot, stop rule):** 320 px / 130 mm cache in two parts (`PART="1/2"`, `"2/2"` → new datasets `knee-mri-cache-320a`, `-320b`; training joins all attached parts and checks they are complete); groups `v6_b0` (grad ckpt, ~80 min/fold) and `v6_cnxn` (grad ckpt, 15 epochs, ~155 min/fold). Session 1 = fold 0 of both (~2.6 h): go on only if clearly above the 256 px fold 0 (B0 0.8607, CNXN 0.8568 val). Then folds 1-4 (~7.8 h) → own submission; blend into the fork only if own LB ≥ ~0.925, otherwise stop and pick finals (plain fork + fork with v5 at 0.25). GPU quota on 6 Oct: 23 h.
+**320 px session 1 result (3.67 GPU h, more than the 2.6 h estimate: ConvNeXt 1.83 s/step, 216 min/fold; B0 1.12 s/step, 90 min/fold; data waiting 0 %):** fold-0 val (TTA) B0 0.8607 → 0.8648 (+0.004), ConvNeXt 0.8568 → 0.8586 (+0.002); gold B0 0.886 → 0.888, ConvNeXt 0.898 → 0.899, blend 0.903 → 0.903. Below the +0.005 stop rule; folds 1-4 would cost ~10 GPU h for maybe +0.003 own LB. 320 px datasets `knee-mri-cache-320a/-320b` exist.
+
 Plan: (1) CPU: build `knee-mri-cache-v5` (~1.5–2 h). (2) GPU session 1: bench + B0 fold 0 + ConvNeXt-Nano fold 0 in parallel;
 compare fold-0 val AUC with the old 224 px v4 B0 fold 0 (same folds). (3) Winner × 5 folds (~3 rounds on 2 GPUs).
 (4) Own submission alone; it needs ~0.92 before the fork blend can help. (5) Fork + member at 0.25.

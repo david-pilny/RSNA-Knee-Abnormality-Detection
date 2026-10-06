@@ -50,11 +50,16 @@ BASE = dict(
     seed=42,
 )
 CNXN = {"backbone": "convnext_nano.in12k_ft_in1k", "lr": 1.5e-4, "weight_decay": 0.05, "drop_path": 0.1}
-# Session 1 (done 5 Oct): bench + {"name": "v5_b0", "fold": 0} + {"name": "v5_cnxn", "fold": 0, **CNXN}.
-# Session 2: folds 1-4 of both groups; fold 0 is reused from the attached session-1 output (section 6).
+# 256 px cache (5-6 Oct, done): v5_b0 and v5_cnxn, 5 folds each → 0.918 public.
+# 320 px / 130 mm cache (knee-mri-cache-320a + -320b): v6 groups. At 320 px B0 needs ~18 GB without gradient
+# checkpointing (T4: 16 GB), so it is on for both. ConvNeXt was still improving at epoch 10 → 15 epochs.
+V6_B0 = {"grad_ckpt": True}
+V6_CNXN = {**CNXN, "grad_ckpt": True, "epochs": 15}
+FOLDS = [0]                    # session 1: fold 0 only (compare with 256 px: B0 0.8607, ConvNeXt 0.8568 val)
+                               # session 2: [1, 2, 3, 4] (fold 0 is reused from the attached session-1 output)
 JOBS = []
-for k in [1, 2, 3, 4]:
-    JOBS += [{"name": "v5_cnxn", "fold": k, **CNXN}, {"name": "v5_b0", "fold": k}]
+for k in FOLDS:
+    JOBS += [{"name": "v6_cnxn", "fold": k, **V6_CNXN}, {"name": "v6_b0", "fold": k, **V6_B0}]
 if os.environ.get("JOBS"):                      # local tests override the job list
     JOBS = json.loads(os.environ["JOBS"])
 N_FOLDS = 5
@@ -97,14 +102,41 @@ def find(name, base="/kaggle/input", max_depth=6):
         frontier = nxt
     raise FileNotFoundError(f"{name} not found under {base}: is the dataset attached?")
 
+def find_all(name, base=os.environ.get("INPUT_BASE", "/kaggle/input"), max_depth=6):
+    hits, frontier = [], [Path(base)]
+    for _ in range(max_depth):
+        nxt = []
+        for d in frontier:
+            if SLUG in d.name:
+                continue
+            try:
+                for c in d.iterdir():
+                    if c.name == name:
+                        hits.append(c)
+                    elif c.is_dir():
+                        nxt.append(c)
+            except OSError:
+                pass
+        frontier = nxt
+    return hits
+
 LABELS_CSV = find("labels_v4.csv")
-CACHE_DIR = find("index.csv").parent
-CACHE_CFG = json.loads((CACHE_DIR / "config.json").read_text())
+# The cache may come in parts (e.g. knee-mri-cache-320a + -320b, each made by one preprocessing run): find all of them.
+_folders = [i.parent for i in find_all("index.csv") if (i.parent / "config.json").exists()
+            and "ROLES" in json.loads((i.parent / "config.json").read_text())]
+assert _folders, "no cache found: attach the cache dataset(s)"
+_cfgs = [json.loads((d / "config.json").read_text()) for d in _folders]
+CACHE_CFG = _cfgs[0]
+for d, c in zip(_folders, _cfgs):
+    print("cache part:", d, "|", {k: c.get(k) for k in ["DEPTH", "IMG", "CROP_MM", "PART", "studies"]})
+    assert all(c.get(k) == CACHE_CFG.get(k) for k in ["ROLES", "DEPTH", "IMG", "CROP_MM"]), "cache parts differ in settings"
+assert CACHE_CFG.get("CROP_MM"), "this is the old (uncropped) cache: attach a cropped cache"
+_parts = sorted(c.get("PART", "1/1") for c in _cfgs)
+_n = int(_parts[0].split("/")[1])
+assert _parts == [f"{k}/{_n}" for k in range(1, _n + 1)], f"cache parts attached: {_parts}, expected all {_n} of them"
 CACHE_ROLES = list(CACHE_CFG["ROLES"])
 DEPTH, IMG = CACHE_CFG["DEPTH"], CACHE_CFG["IMG"]
 print("labels:", LABELS_CSV)
-print("cache :", CACHE_DIR, "|", {k: CACHE_CFG.get(k) for k in ["DEPTH", "IMG", "CROP_MM"]})
-assert CACHE_CFG.get("CROP_MM"), "this is the old (uncropped) cache: attach knee-mri-cache-v5"
 
 # %% [markdown]
 # ## 3. Labels, gold hold-out and folds
@@ -118,7 +150,9 @@ from sklearn.model_selection import GroupKFold
 LABELS = ["ACL", "MCL", "Medial Meniscus", "Lateral Meniscus", "Medial OA", "Lateral OA",
           "PF OA", "Effusion", "Synovitis", "Baker's", "Contusion", "Fracture"]
 lab = pd.read_csv(LABELS_CSV)
-idx = pd.read_csv(CACHE_DIR / "index.csv")
+idx = pd.concat([pd.read_csv(d / "index.csv").assign(shard=lambda f, d=d: [str(d / s) for s in f.shard]) for d in _folders],
+                ignore_index=True)                      # shard = full path, so the parts can live in different folders
+assert not idx.duplicated(["StudyInstanceUID", "role"]).any(), "a study appears in two cache parts"
 
 ok = idx[idx.ok.astype(bool)].pivot_table(index="StudyInstanceUID", columns="role", values="ok", aggfunc="size").reindex(columns=BASE["roles"]).notna()
 vendor = idx.sort_values("role").groupby("StudyInstanceUID").manufacturer.first().fillna("?")
@@ -178,7 +212,7 @@ by_shard = pd.Series(all_ids).groupby(pd.Series(all_ids).map(shard_of)).apply(li
 
 def load_shard(item):
     shard, sids = item
-    with np.load(CACHE_DIR / shard) as z:
+    with np.load(shard) as z:
         names = set(z.files)
         for s in sids:
             for j, role in enumerate(CACHE_ROLES):
@@ -546,24 +580,6 @@ def run_jobs(jobs):
 # training settings, its fold files are copied into this run's output and those folds are not trained again.
 SAME_KEYS = ["backbone", "roles", "n_triplets", "epochs", "batch_size", "lr", "weight_decay", "warmup_epochs",
              "drop_path", "seed", "labels_file", "depth", "img", "crop_mm"]
-
-def find_all(name, base=os.environ.get("INPUT_BASE", "/kaggle/input"), max_depth=6):
-    hits, frontier = [], [Path(base)]
-    for _ in range(max_depth):
-        nxt = []
-        for d in frontier:
-            if SLUG in d.name or d.name == "cache":
-                continue
-            try:
-                for c in d.iterdir():
-                    if c.name == name:
-                        hits.append(c)
-                    elif c.is_dir():
-                        nxt.append(c)
-            except OSError:
-                pass
-        frontier = nxt
-    return hits
 
 def job_cfg(job):
     return {**BASE, **job, "labels_file": LABELS_CSV.name, "depth": DEPTH, "img": IMG, "crop_mm": CACHE_CFG.get("CROP_MM")}
