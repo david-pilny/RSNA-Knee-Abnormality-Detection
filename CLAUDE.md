@@ -2,7 +2,7 @@
 
 Hand-off notes for continuing this project in a new session. Last updated **10 Oct 2026**.
 
-**Where we are:** David chose to build on the public 0.94 notebook (`DECISION.md` records the decision and its outcome). The fork
+**Where we are:** David chose to build on the public 0.94 notebook (`docs/DECISION.md` records the decision and its outcome). The fork
 alone scores **0.943**; our own models (v5: 0.918 alone) add nothing to it (§6.5). Resolution is exhausted (320 px: +0.003 val).
 **10 Oct: canonical knee side (v7, §7) tested on fold 0 — no gain (B0 +0.001, ConvNeXt −0.007 val): stopped.** Every
 model-side lever (labels, resolution, side, backbone) has now been measured at ≤ +0.003. What remains: pick the two finals
@@ -106,22 +106,21 @@ competition data ──► ① report labeller v4 (Qwen2.5-32B 4-bit, 2×T4) ─
 Local copies (numbers only, git-ignored `data/`): `labels_v3.csv`, `labels_v4.csv`, `llm_probs_v4.csv`, `v3/` and `v4/` with
 `gold_predictions.csv` + `oof_predictions.csv`.
 
-## 5. Files in the repo
+## 5. Files in the repo (reorganised 10 Oct)
 
-| File | Purpose | Status |
+| Path | Purpose | Status |
 |---|---|---|
-| `rsna_knee_data_explained.py` | data explainer with interactive three.js 3D viewer | done |
-| `rsna_knee_dummy_submission.py` | constant-prior submission; tests the offline pipeline | submitted → 0.500 |
-| `rsna_knee_report_labeler.py` | v3 labeller (Qwen2.5-7B, one word per finding, parsed) | superseded by v4 |
-| `rsna_knee_report_labeler_v4.py` | **v4 labeller** (§6.1) | full run done |
-| `rsna_knee_preprocess_cache.py` | DICOM → cache shards + `knee_preproc.py` | done (98 min, 10.4 GB) |
-| `rsna_knee_train_baseline.py` | training (§6.3); currently reads `labels_v4.csv`, runs all five folds | v3 and v4 five-fold runs done |
-| `rsna_knee_speed_diagnostic.py` | GPU speed / memory diagnostic (found the DataParallel bug) | done |
-| `rsna_knee_submission.py` | submission with rank-blended model groups (§6.4) | submitted → 0.906 |
+| `notebooks/rsna_knee_report_labeler_v4.py` | **v4 labeller** (§6.1) | full run done |
+| `notebooks/rsna_knee_preprocess_cache_v5.py` | DICOM → cropped 256 px cache shards + `knee_preproc.py` (§7, 5 Oct) | done → `knee-mri-cache` latest |
+| `notebooks/rsna_knee_train_v5.py` | two-GPU job training, v7 side/canonical paths (§6.3, §7) | v5 five folds, 320 px and v7 fold 0 done |
+| `notebooks/rsna_knee_submission.py` | submission with rank-blended model groups (§6.4) | submitted → 0.918 (v5) |
+| `notebooks/rsna_knee_public_member_cell.py` | our member cell for the forked public notebook (§6.6) | fork + member → 0.943 |
+| `public/our_member_cell_code.py` | the same cell without the 18-line header, as pasted into the fork (`tail -n +19`) | – |
+| `archive/` | superseded notebooks: v3 labeller, 224 px preprocess, baseline training, dummy submission, speed diagnostic | kept for reference |
+| `docs/` | `rsna_knee_data_explained.py` (interactive data explainer), the two explainer PDFs (older state), `DECISION.md` (2 Oct decision + outcome), `next-steps-6-oct.md` (options ranked on 6 Oct) | – |
 | `analysis/*.py` | offline analysis of labels and predictions against gold (run from the project root with `PYTHONPATH=analysis .venv/bin/python analysis/<script>.py`; needs `data/`) | – |
-| `tests/` | fake-data generators and the labeller engine test (§3) | – |
-| `DECISION.md` | the open decision about the next step | waiting for David |
-| `rsna_knee_explainer.pdf`, `rsna_knee_project_report.pdf` | explainer PDFs for the user | older state |
+| `tests/` | fake-data generators, local tests, `make_kaggle_ipynb.py` (§3) | – |
+| `kaggle_upload/` (git-ignored) | `.ipynb` built from the notebooks for File → Import Notebook | – |
 
 ## 6. Component details and results
 
@@ -153,7 +152,7 @@ Local copies (numbers only, git-ignored `data/`): `labels_v3.csv`, `labels_v4.cs
 - v3 labeller, for reference: Qwen2.5-7B fp16, grades `present / minimal / uncertain / absent / not_mentioned`, tolerant
   parser, 3.8 h, 3.6 % studies with a parse error.
 
-### 6.2 Preprocessing cache (`rsna_knee_preprocess_cache.py` → `knee_preproc.py`)
+### 6.2 Preprocessing cache (`archive/rsna_knee_preprocess_cache.py` → `knee_preproc.py`; v5 crop version in `notebooks/`)
 - Roles: `sag_fs` (Sagittal, fluid), `cor_fs` (Coronal, fluid), `ax_fs` (Axial, fluid); prefer fat-sat; else fallback to any
   series of that plane (flag `fallback`). All 3 roles available for 100 % of training-pool studies.
 - Per series: load all slices, sort by `ImagePositionPatient` along a canonical axis, **canonical orientation**
@@ -164,7 +163,7 @@ Local copies (numbers only, git-ignored `data/`): `labels_v3.csv`, `labels_v4.cs
 - Shards: 100 studies each, keys `<StudyInstanceUID>__<role>`; `CacheReader(cache_dir).load(uid)`.
 - `knee_preproc.process_study(uid, study_rows, series_root, roles, depth, img)` is used **identically** in the submission.
 
-### 6.3 Training (`rsna_knee_train_baseline.py`)
+### 6.3 Training (`archive/rsna_knee_train_baseline.py`; the current `notebooks/rsna_knee_train_v5.py` keeps the same model)
 - 2.5D multi-view: each series → 8 "RGB" images of 3 neighbouring slices (centres jitter ±1 in training) → shared
   timm `efficientnet_b0` (ImageNet-pretrained) → attention pooling over the 8 → + role embedding, × role mask → concat
   (+ mask) → MLP → 12 logits. Masked soft-label BCE (NaN labels masked).

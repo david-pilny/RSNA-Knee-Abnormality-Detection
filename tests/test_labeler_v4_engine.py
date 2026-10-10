@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-nb = runpy.run_path(str(Path(__file__).resolve().parents[1] / "rsna_knee_report_labeler_v4.py"))
+nb = runpy.run_path(str(Path(__file__).resolve().parents[1] / "notebooks" / "rsna_knee_report_labeler_v4.py"))
 model, grade_batch, IDS, TEST_IDS = nb["model"], nb["grade_batch"], nb["IDS"], nb["TEST_IDS"]
 LETTER_IDS, PIECE_IDS, CODES = nb["LETTER_IDS"], nb["PIECE_IDS"], nb["CODES"]
 assert nb["PREFIX_CACHE"] is not None, "instruction cache is off: nothing to test"

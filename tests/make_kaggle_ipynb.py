@@ -1,7 +1,7 @@
 """Build an importable Kaggle notebook (.ipynb) from a percent-format script, with the kernel metadata Kaggle's
 papermill runner requires ("No kernel name found in notebook" otherwise).
 
-Usage (from the project root): .venv/Scripts/python tests/make_kaggle_ipynb.py rsna_knee_submission.py [...]
+Usage (from the project root): .venv/Scripts/python tests/make_kaggle_ipynb.py notebooks/rsna_knee_submission.py [...]
 Writes kaggle_upload/<name>.ipynb (git-ignored like every .ipynb).
 """
 import sys

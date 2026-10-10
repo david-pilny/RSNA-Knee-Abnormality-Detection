@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-src = Path(__file__).resolve().parents[1].joinpath("rsna_knee_preprocess_cache_v5.py").read_text(encoding="utf-8")
+src = Path(__file__).resolve().parents[1].joinpath("notebooks", "rsna_knee_preprocess_cache_v5.py").read_text(encoding="utf-8")
 module_src = re.search(r"PREPROC_SRC = r'''(.*?)'''", src, re.S).group(1).replace("__CROP_MM__", "140.0")
 kp = types.ModuleType("knee_preproc")
 exec(module_src, kp.__dict__)
