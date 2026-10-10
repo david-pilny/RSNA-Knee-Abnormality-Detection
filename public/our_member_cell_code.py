@@ -54,7 +54,7 @@ def our_member():
     for d in sorted(find_dirs_with("train_config.json", skip={root})):
         cfg, files = json.loads((d / "train_config.json").read_text()), sorted(d.glob("model_fold*.pt"))
         if files:
-            groups.append({"name": cfg.get("group_name") or str(cfg.get("labels_file", d.name)).rsplit(".", 1)[0], "cfg": cfg, "files": files})
+            groups.append({"name": cfg.get("group_name") or str(cfg.get("labels_file", d.name)).rsplit(".", 1)[0], "cfg": cfg, "files": files, "dir": d})
     assert groups, "no model datasets (train_config.json + model_fold*.pt) attached"
     for g in groups:
         assert g["cfg"]["labels"] == LABELS and g["cfg"].get("depth", cache_cfg["DEPTH"]) == cache_cfg["DEPTH"]
@@ -150,28 +150,60 @@ def our_member():
         x = x_u8.to(device).float() / 255.0
         return (make_triplets(x, cfg["n_triplets"]) - cfg["mean"]) / cfg["std"]
 
-    def mirror(x_u8):
+    def mirror(x_u8, sel=None):                              # sel: bool tensor of the studies to mirror (default all)
         x = x_u8.clone()
+        sel = slice(None) if sel is None else sel
         for j, role in enumerate(roles):
-            x[:, j] = x[:, j].flip(1) if role.startswith("sag") else x[:, j].flip(3)
+            x[sel, j] = x[sel, j].flip(1) if role.startswith("sag") else x[sel, j].flip(3)
         return x
 
+    def load_model(path, backbone, n_roles, n_out=12):
+        m = KneeNet(backbone, False, n_roles, n_out).to(device)
+        m.load_state_dict({k: v.float() for k, v in torch.load(path, map_location=device).items()})
+        return (m.to(memory_format=torch.channels_last) if channels_last else m).eval()
+
+    # canonical-side groups (v7) ship a left/right classifier; left knees are mirrored and the group predicts one view
+    side_models = {}
     for g in groups:
         g["role_idx"] = [roles.index(r) for r in g["cfg"]["roles"]]
-        g["models"] = []
-        for f in g["files"]:
-            m = KneeNet(g["cfg"]["backbone"], False, len(g["cfg"]["roles"])).to(device)
-            m.load_state_dict({k: v.float() for k, v in torch.load(f, map_location=device).items()})
-            if channels_last:
-                m = m.to(memory_format=torch.channels_last)
-            g["models"].append(m.eval())
-    _our_log(f"loaded {sum(len(g['models']) for g in groups)} models on {device}")
+        g["models"] = [load_model(f, g["cfg"]["backbone"], len(g["cfg"]["roles"])) for f in g["files"]]
+        g["canon"], g["tta"] = g["cfg"].get("canonical_side"), g["cfg"].get("tta", True)
+        if g["canon"]:
+            sp = g["dir"] / g["cfg"].get("side_model", "side_model.pt")
+            scfg = json.loads((g["dir"] / "side_config.json").read_text())
+            key = (sp.stat().st_size, scfg["backbone"], tuple(scfg["roles"]))
+            if key not in side_models:
+                side_models[key] = dict(model=load_model(sp, scfg["backbone"], len(scfg["roles"]), 1), cfg=scfg,
+                                        role_idx=[roles.index(r) for r in scfg["roles"]])
+            g["side"] = side_models[key]
+    _our_log(f"loaded {sum(len(g['models']) for g in groups)} models on {device} | canonical side: "
+             f"{[g['name'] for g in groups if g['canon']] or 'no group'} | TTA {[g['tta'] for g in groups]}")
+    side_log = []
+
+    @torch.no_grad()
+    def side_p_left(x_u8, rmask, s):                         # antisymmetric: (f(x) + 1 - f(mirror x)) / 2
+        rm, out = rmask[:, s["role_idx"]].to(device), 0
+        for flip in (False, True):
+            x = prepare((mirror(x_u8) if flip else x_u8)[:, s["role_idx"]], s["cfg"])
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device == "cuda"):
+                p = torch.sigmoid(s["model"](x, rm).float())[:, 0]
+            out = out + (1 - p if flip else p)
+        return 0.5 * out
 
     @torch.no_grad()
     def predict_batch(x_u8, rmask):
-        views = [x_u8, mirror(x_u8)]
-        out = []
+        out, canon_views = [], {}
         for g in groups:
+            base = x_u8
+            if g["canon"]:
+                key = id(g["side"])
+                if key not in canon_views:
+                    p_left = side_p_left(x_u8, rmask, g["side"])
+                    side_log.extend(p_left.cpu().numpy().tolist())
+                    need_flip = (p_left > 0.5) if g["canon"] == "R" else (p_left <= 0.5)
+                    canon_views[key] = mirror(x_u8, need_flip.cpu()) if bool(need_flip.any()) else x_u8
+                base = canon_views[key]
+            views = [base, mirror(base)] if g["tta"] else [base]
             rm, probs = rmask[:, g["role_idx"]].to(device), []
             for v in views:
                 x = prepare(v[:, g["role_idx"]], g["cfg"])
@@ -218,6 +250,9 @@ def our_member():
             done = min(c + OUR_CHUNK, len(studies)); el = time.time() - _our_t0
             _our_log(f"{done}/{len(studies)} studies | ETA {el / done * (len(studies) - done) / 60:.0f} min")
     _our_log(f"predicted {len(preds)}/{len(studies)} studies ({n_fail} without usable images)" + (" | STOPPED at the time limit" if stopped else ""))
+    if side_log:
+        sl = np.asarray(side_log)
+        _our_log(f"knee side: left {np.mean(sl > 0.5):.1%} | uncertain (|p - 0.5| < 0.1) {np.mean(np.abs(sl - 0.5) < 0.1):.1%}")
     assert len(preds) >= max(1, len(studies) // 2), "fewer than half of the studies predicted: keeping the public result"
 
     # ---- our member's own rank blend (as in our submission), then blend into the staged predictions

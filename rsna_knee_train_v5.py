@@ -17,8 +17,17 @@
 # **Benchmark job.** `{"name": "bench", "bench": [...]}` times a few backbones (forward + backward on one real-sized batch)
 # and prints seconds per step and GPU memory, so we can plan longer runs on facts.
 #
+# **Side job and canonical knees (v7, 10 Oct).** So far every knee was shown in both orientations (mirror augmentation
+# with p = 0.5, mirror TTA), which makes the model *side-blind*: after a mirror, the medial compartment sits where the
+# lateral one usually is, while the labels (Medial/Lateral Meniscus, Medial/Lateral OA — a third of the targets) do not
+# change. The model then has to work out the side from the anatomy (the fibula is lateral) before it can read a
+# side-specific finding. Our two weakest findings are exactly Lateral Meniscus and Lateral OA. The v7 groups instead
+# show every knee as a **right knee**: `{"name": "side", "side": True}` trains a left/right classifier on the studies
+# that carry the DICOM `Laterality` tag and predicts the side of all the others; groups with `canonical_side="R"` then
+# mirror the left knees in the loader and train **without** mirror augmentation or TTA.
+#
 # **Settings:** Accelerator **GPU T4 ×2**, Internet **on** (pretrained backbones download once). Inputs: `knee-report-labels-v4`
-# (`labels_v4.csv`) and `knee-mri-cache-v5`.
+# (`labels_v4.csv`) and the 256 px cache (`knee-mri-cache`, latest version).
 
 # %% [markdown]
 # ## 1. Settings
@@ -28,6 +37,9 @@
 # - **Session 1 (comparison on fold 0):** benchmark + EfficientNet-B0 + ConvNeXt-Nano, each on fold 0.
 #   Compare their fold-0 validation AUC with the old 224 px B0 run's fold 0 (same folds, same labels).
 # - **Session 2 (full run):** the winner on all five folds: `[dict(name=..., fold=k) for k in range(5)]`.
+# - **v7 session 1 (canonical side, fold 0):** the side job (alone, ~15 min), then `v7_b0` and `v7_cnxn` fold 0 in
+#   parallel. Compare with the 256 px fold-0 numbers (B0 0.8607, ConvNeXt 0.8568 val, mirror TTA), especially
+#   Lateral Meniscus and Lateral OA. The side job's own report (tag coverage, hold-out accuracy) is printed first.
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
 import os, sys, json, time, math, shutil, subprocess, threading, queue
@@ -48,18 +60,28 @@ BASE = dict(
     grad_ckpt=False,           # trade speed for GPU memory (only needed for large backbones)
     log_every=50,
     seed=42,
+    mirror_aug=True,           # joint knee mirror with p = 0.5 during training
+    tta=True,                  # average the plain and the mirrored view at prediction time
+    canonical_side=None,       # "R": mirror every left knee (side from the side job) so all knees look alike
 )
 CNXN = {"backbone": "convnext_nano.in12k_ft_in1k", "lr": 1.5e-4, "weight_decay": 0.05, "drop_path": 0.1}
 # 256 px cache (5-6 Oct, done): v5_b0 and v5_cnxn, 5 folds each → 0.918 public.
 # 320 px / 130 mm cache (knee-mri-cache-320a + -320b): v6 groups. At 320 px B0 needs ~18 GB without gradient
 # checkpointing (T4: 16 GB), so it is on for both. ConvNeXt was still improving at epoch 10 → 15 epochs.
+# Result (6 Oct): +0.002 to +0.004 val on fold 0, below the stop rule; not continued.
 V6_B0 = {"grad_ckpt": True}
 V6_CNXN = {**CNXN, "grad_ckpt": True, "epochs": 15}
+# v7 (10 Oct): canonical side on the 256 px cache. The side job trains the left/right classifier first (3 epochs, B0);
+# the groups then see every knee as a right knee, without mirror augmentation and without mirror TTA.
+SIDE_JOB = {"name": "side", "side": True, "side_epochs": 3, "side_holdout": 0.15, "mirror_aug": False}
+CANON = {"canonical_side": "R", "mirror_aug": False, "tta": False}
+V7_B0 = {**CANON}
+V7_CNXN = {**CNXN, **CANON}
 FOLDS = [0]                    # session 1: fold 0 only (compare with 256 px: B0 0.8607, ConvNeXt 0.8568 val)
                                # session 2: [1, 2, 3, 4] (fold 0 is reused from the attached session-1 output)
-JOBS = []
+JOBS = [SIDE_JOB]
 for k in FOLDS:
-    JOBS += [{"name": "v6_cnxn", "fold": k, **V6_CNXN}, {"name": "v6_b0", "fold": k, **V6_B0}]
+    JOBS += [{"name": "v7_cnxn", "fold": k, **V7_CNXN}, {"name": "v7_b0", "fold": k, **V7_B0}]
 if os.environ.get("JOBS"):                      # local tests override the job list
     JOBS = json.loads(os.environ["JOBS"])
 N_FOLDS = 5
@@ -162,6 +184,22 @@ df = df[df.n_roles > 0].copy()
 df["vendor"] = df.StudyInstanceUID.map(vendor).fillna("?")
 df["site"] = df.language.fillna("?").astype(str) + "|" + df.vendor.astype(str).str.upper().str.split().str[0]
 df["n_known"] = df[LABELS].notna().sum(axis=1)
+
+# Knee side, for the side job: the DICOM `Laterality` tag as stored in the cache index (per series; a study's tag is the
+# first L/R among its series) and the x-position of the first slice (a weak hint: +x is the patient's left).
+if "laterality" in idx.columns:
+    _lat = idx.laterality.astype(str).str.strip().str.upper().str[:1].where(lambda s: s.isin(["L", "R"]))
+    lat_tag = _lat.groupby(idx.StudyInstanceUID).first()
+else:
+    lat_tag = pd.Series(dtype=object)
+df["lat_tag"] = df.StudyInstanceUID.map(lat_tag)
+df["x_center"] = df.StudyInstanceUID.map(idx.groupby("StudyInstanceUID").x_center.first()) if "x_center" in idx.columns else np.nan
+_c = df.lat_tag.value_counts(dropna=False).to_dict()
+print(f"Laterality tag: {_c} ({df.lat_tag.notna().mean():.1%} of studies tagged)")
+if df.lat_tag.notna().any() and df.x_center.notna().any():
+    _t = df[df.lat_tag.notna() & df.x_center.notna()]
+    print(f"  sign of x-position agrees with the tag in {((_t.x_center > 0) == (_t.lat_tag == 'L')).mean():.1%} "
+          f"of {len(_t)} tagged studies (x-position alone is {'' if ((_t.x_center > 0) == (_t.lat_tag == 'L')).mean() > 0.95 else 'not '}a usable side guess)")
 
 gold_df = df[df.is_gold.astype(bool)].reset_index(drop=True)
 pool = df[~df.is_gold.astype(bool) & (df.n_known > 0)].reset_index(drop=True)
@@ -332,11 +370,12 @@ def mirror(x, sel=None):
         x[sel, j] = x[sel, j].flip(1) if role.startswith("sag") else x[sel, j].flip(3)
     return x
 
-def augment(x):
+def augment(x, mirror_p=0.5):
     B, R, D, H, W = x.shape
-    flip = torch.rand(B, device=x.device) < 0.5
-    if flip.any():
-        x = mirror(x, flip)
+    if mirror_p > 0:
+        flip = torch.rand(B, device=x.device) < mirror_p
+        if flip.any():
+            x = mirror(x, flip)
     ang = (torch.rand(B * R, device=x.device) - 0.5) * math.radians(20)
     scale = 1 + (torch.rand(B * R, device=x.device) - 0.5) * 0.2
     tx, ty = [(torch.rand(B * R, device=x.device) - 0.5) * 0.1 for _ in range(2)]
@@ -349,12 +388,15 @@ def augment(x):
     g = torch.exp((torch.rand(B, R, 1, 1, 1, device=x.device) - 0.5) * 0.4)
     return ((x.clamp(0, 1) ** g) * c + b).clamp(0, 1)
 
-def prepare(x_u8, train, flip=False):
+def prepare(x_u8, train, flip=False, canon=None):
+    """canon: per-study bool tensor, True = mirror this study first (left knee → shown as a right knee)."""
     x = x_u8.to(DEVICE, non_blocking=True).float() / 255.0
+    if canon is not None and bool(canon.any()):
+        x = mirror(x, canon.to(x.device))
     if flip:
         x = mirror(x)
     if train:
-        x = augment(x)
+        x = augment(x, 0.5 if CFG.get("mirror_aug", True) else 0.0)
     return (make_triplets(x, CFG["n_triplets"], train) - MEAN) / STD
 
 # ---------------------------------------------------------------- benchmark mode
@@ -413,10 +455,14 @@ RMASK_ALL = np.load(C["rmask_path"])
 ROW = {s: i for i, s in enumerate(pd.read_csv(C["ids_path"]).StudyInstanceUID)}
 ROLE_IDX = [C["cache_roles"].index(r) for r in ROLES]
 pool = pd.read_csv(C["pool_path"]); gold = pd.read_csv(C["gold_path"])
+SIDE_DIR = Path(C["out_dir"]) / "side"
 
-def batches(frame, bs, shuffle, drop_last=False, seed=0):
+def batches(frame, bs, shuffle, drop_last=False, seed=0, cols=None):
+    """Yields (images uint8, role mask, targets, target mask, canonical-flip mask) per batch of studies.
+    The flip mask is True for studies that must be mirrored first (column `need_flip`, else all False)."""
     rows = frame.StudyInstanceUID.map(ROW).to_numpy()
-    y = frame[LABELS].to_numpy(np.float32)
+    y = frame[cols or LABELS].to_numpy(np.float32)
+    canon = frame.need_flip.to_numpy(bool) if "need_flip" in frame.columns else np.zeros(len(frame), bool)
     order = np.random.default_rng(seed).permutation(len(frame)) if shuffle else np.arange(len(frame))
     chunks = [order[i:i + bs] for i in range(0, len(order), bs)]
     if drop_last and chunks and len(chunks[-1]) < bs:
@@ -426,7 +472,8 @@ def batches(frame, bs, shuffle, drop_last=False, seed=0):
         x = np.ascontiguousarray(X[np.sort(r)][:, ROLE_IDX][np.argsort(np.argsort(r))])   # read in file order, restore batch order
         yy = y[ch]
         return (torch.from_numpy(x), torch.from_numpy(RMASK_ALL[r][:, ROLE_IDX]),
-                torch.from_numpy(np.nan_to_num(yy)), torch.from_numpy((~np.isnan(yy)).astype(np.float32)))
+                torch.from_numpy(np.nan_to_num(yy)), torch.from_numpy((~np.isnan(yy)).astype(np.float32)),
+                torch.from_numpy(canon[ch]))
     if not chunks:
         return
     with ThreadPoolExecutor(1) as ex:
@@ -435,6 +482,95 @@ def batches(frame, bs, shuffle, drop_last=False, seed=0):
             cur = nxt.result()
             nxt = ex.submit(load, chunks[i + 1]) if i + 1 < len(chunks) else None
             yield cur
+
+# ---------------------------------------------------------------- side job: left or right knee?
+# Trained on the studies with a Laterality tag (target 1 = left). Every batch is half mirrored with the target swapped,
+# so the classifier learns the knee's chirality (fibula lateral, etc.), not the scanner or the site. Prediction uses the
+# antisymmetric average p = (f(x) + 1 - f(mirror x)) / 2, which is exactly 0.5 for a knee the model finds symmetric.
+if job.get("side"):
+    frame = pd.concat([pool, gold], ignore_index=True).drop_duplicates("StudyInstanceUID").reset_index(drop=True)
+    frame["side_y"] = (frame.lat_tag == "L").astype(np.float32).where(frame.lat_tag.isin(["L", "R"]))
+    tagged = frame[frame.side_y.notna()].copy()
+    n_l, n_r = int((tagged.side_y == 1).sum()), int((tagged.side_y == 0).sum())
+    log(f"side job: {len(tagged)} tagged studies (L {n_l}, R {n_r}) of {len(frame)}")
+    assert min(n_l, n_r) >= CFG.get("side_min", 30), "too few tagged studies of one side to train a side classifier"
+    rng = np.random.default_rng(CFG["seed"])
+    tagged["holdout"] = rng.random(len(tagged)) < CFG.get("side_holdout", 0.15)
+    tr, ho = tagged[~tagged.holdout], tagged[tagged.holdout]
+    seed_all(CFG["seed"])
+    model = KneeNet(CFG["backbone"], CFG["pretrained"], len(ROLES), n_out=1).to(DEVICE)
+    model = model.to(memory_format=torch.channels_last) if AMP else model
+    epochs, bs = int(CFG.get("side_epochs", 3)), CFG["batch_size"]
+    steps_ep = max(1, len(tr) // bs)
+    opt = torch.optim.AdamW(model.parameters(), lr=CFG["lr"], weight_decay=CFG["weight_decay"])
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=CFG["lr"], total_steps=epochs * steps_ep, pct_start=0.15)
+    scaler = torch.amp.GradScaler(enabled=AMP)
+    t_job = time.time()
+    for ep in range(epochs):
+        model.train(); losses = []; t0 = time.time()
+        for step, (x, rmask, y, _, _) in enumerate(batches(tr, bs, True, True, seed=CFG["seed"] * 100 + ep, cols=["side_y"])):
+            sel = torch.rand(len(x)) < 0.5                       # mirror half of the batch and swap their target
+            y = torch.where(sel[:, None], 1 - y, y).to(DEVICE)
+            x = prepare(x, train=True, canon=sel); rmask = rmask.to(DEVICE)
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=AMP):
+                logits = model(x, rmask)
+            loss = F.binary_cross_entropy_with_logits(logits.float(), y)
+            opt.zero_grad(set_to_none=True)
+            scaler.scale(loss).backward(); scaler.unscale_(opt); nn.utils.clip_grad_norm_(model.parameters(), 2.0)
+            scaler.step(opt); scaler.update(); sched.step()
+            losses.append(loss.item())
+            if (step + 1) % CFG["log_every"] == 0 or step == 0:
+                log(f"side ep {ep + 1} step {step + 1}/{steps_ep} | loss {np.mean(losses[-CFG['log_every']:]):.4f} | "
+                    f"{(time.time() - t0) / (step + 1):.2f} s/step")
+        log(f"side epoch {ep + 1} | loss {np.mean(losses):.4f} | {(time.time() - t0) / 60:.1f} min")
+
+    @torch.no_grad()
+    def predict_side(fr):
+        model.eval(); out = []
+        for x, rmask, _, _, _ in batches(fr, bs, shuffle=False):
+            rmask = rmask.to(DEVICE)
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=AMP):
+                p = torch.sigmoid(model(prepare(x, False), rmask).float())
+                q = torch.sigmoid(model(prepare(x, False, flip=True), rmask).float())
+            out.append((0.5 * (p + 1 - q)).cpu().numpy()[:, 0])
+        return np.concatenate(out) if out else np.zeros(0)
+
+    frame["p_left"] = predict_side(frame)
+    frame["holdout"] = frame.StudyInstanceUID.isin(ho.StudyInstanceUID)
+    frame["side"] = np.where(frame.lat_tag.isin(["L", "R"]), frame.lat_tag, np.where(frame.p_left > 0.5, "L", "R"))
+    frame["source"] = np.where(frame.lat_tag.isin(["L", "R"]), "tag", "model")
+    pred_lr = np.where(frame.p_left > 0.5, "L", "R")
+    acc = {}
+    for name, m in [("hold-out", frame.holdout), ("training", frame.side_y.notna() & ~frame.holdout)]:
+        f = frame[m]
+        if len(f):
+            acc[name] = float((pred_lr[m.to_numpy()] == f.lat_tag).mean())
+            auc = roc_auc_score(f.side_y, f.p_left) if f.side_y.nunique() == 2 else float("nan")
+            log(f"side classifier on {name} tagged studies: n {len(f)} | accuracy {acc[name]:.3f} | AUC {auc:.3f}")
+    un = frame[frame.source == "model"]
+    if len(un):
+        conf = (un.p_left - 0.5).abs()
+        log(f"untagged studies: {len(un)} | predicted L {int((un.p_left > 0.5).sum())}, R {int((un.p_left <= 0.5).sum())} | "
+            f"|p - 0.5| quantiles 5/25/50 %: {np.percentile(conf, [5, 25, 50]).round(3).tolist()} | "
+            f"uncertain (< 0.1): {(conf < 0.1).mean():.1%}")
+    SIDE_DIR.mkdir(parents=True, exist_ok=True)
+    frame[["StudyInstanceUID", "lat_tag", "p_left", "holdout", "side", "source"]].to_csv(SIDE_DIR / "side.csv", index=False)
+    torch.save({k: v.half() for k, v in model.state_dict().items()}, SIDE_DIR / "side_model.pt")
+    (SIDE_DIR / "side_config.json").write_text(json.dumps({
+        "backbone": CFG["backbone"], "roles": ROLES, "n_triplets": CFG["n_triplets"], "n_out": 1, "target": "p_left",
+        "mean": MEAN, "std": STD, "antisymmetric_tta": True, "holdout_accuracy": acc.get("hold-out")}))
+    log(f"DONE side | wrote {SIDE_DIR / 'side.csv'} and side_model.pt | {(time.time() - t_job) / 60:.0f} min")
+    sys.exit(0)
+
+# ---------------------------------------------------------------- canonical side: which studies to mirror
+if CFG.get("canonical_side"):
+    side = pd.read_csv(SIDE_DIR / "side.csv").set_index("StudyInstanceUID").side
+    for fr in (pool, gold):
+        missing = fr.StudyInstanceUID[~fr.StudyInstanceUID.isin(side.index)]
+        assert missing.empty, f"{len(missing)} studies without a side: run the side job first"
+        fr["need_flip"] = (fr.StudyInstanceUID.map(side) != CFG["canonical_side"]).to_numpy()
+    log(f"canonical side {CFG['canonical_side']}: mirroring {pool.need_flip.mean():.1%} of the pool and "
+        f"{gold.need_flip.mean():.1%} of the gold studies | mirror augmentation {CFG.get('mirror_aug', True)} | TTA {CFG.get('tta', True)}")
 
 # ---------------------------------------------------------------- metrics
 def masked_bce(logits, y, ymask):
@@ -454,13 +590,13 @@ def auc_table(pred, target):
 def predict(model, frame, tta=False):
     model.eval()
     preds = []
-    for x, rmask, _, _ in batches(frame, CFG["batch_size"], shuffle=False):
+    for x, rmask, _, _, canon in batches(frame, CFG["batch_size"], shuffle=False):
         rmask = rmask.to(DEVICE)
         views = [False, True] if tta else [False]
         p = 0
         for flip in views:
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=AMP):
-                p = p + torch.sigmoid(model(prepare(x, False, flip), rmask).float())
+                p = p + torch.sigmoid(model(prepare(x, False, flip, canon), rmask).float())
         preds.append((p / len(views)).cpu().numpy())
     return np.concatenate(preds)
 
@@ -480,9 +616,9 @@ scaler = torch.amp.GradScaler(enabled=AMP)
 best, hist, t_job = -1, [], time.time()
 for ep in range(CFG["epochs"]):
     model.train(); t0 = time.time(); losses = []; t_wait = 0.0; t_last = time.time()
-    for step, (x, rmask, y, ymask) in enumerate(batches(tr, CFG["batch_size"], True, True, seed=CFG["seed"] * 100 + fold * 10 + ep)):
+    for step, (x, rmask, y, ymask, canon) in enumerate(batches(tr, CFG["batch_size"], True, True, seed=CFG["seed"] * 100 + fold * 10 + ep)):
         t_wait += time.time() - t_last
-        x = prepare(x, train=True); rmask, y, ymask = rmask.to(DEVICE), y.to(DEVICE), ymask.to(DEVICE)
+        x = prepare(x, train=True, canon=canon); rmask, y, ymask = rmask.to(DEVICE), y.to(DEVICE), ymask.to(DEVICE)
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=AMP):
             logits = model(x, rmask)
         loss = masked_bce(logits.float(), y, ymask)
@@ -509,17 +645,18 @@ for ep in range(CFG["epochs"]):
     log(f"epoch {ep + 1:2d} | loss {row['train_loss']:.4f} | val macro AUC {row['val_macro_auc']:.4f} | {row['minutes']:.1f} min{flag}")
 pd.DataFrame(hist).to_csv(out / f"hist_fold{fold}.csv", index=False)
 
-# ---------------------------------------------------------------- final predictions with mirror TTA
+# ---------------------------------------------------------------- final predictions (mirror TTA unless switched off)
+TTA = bool(CFG.get("tta", True))
 sd = torch.load(out / f"model_fold{fold}.pt", map_location=DEVICE)
 model.load_state_dict({k: v.float() for k, v in sd.items()})
-pv = predict(model, va, tta=True)
+pv = predict(model, va, tta=TTA)
 pd.DataFrame(pv, columns=LABELS).assign(StudyInstanceUID=va.StudyInstanceUID.values, fold=fold).to_csv(out / f"oof_fold{fold}.csv", index=False)
-pg = predict(model, gold, tta=True)
+pg = predict(model, gold, tta=TTA)
 pd.DataFrame(pg, columns=LABELS).assign(StudyInstanceUID=gold.StudyInstanceUID.values).to_csv(out / f"gold_fold{fold}.csv", index=False)
 va_auc = auc_table(pv, va[LABELS].to_numpy(dtype=float)).mean()
 gold_auc = auc_table(pg, gold[LABELS].to_numpy(dtype=float)).mean()
-log(f"DONE {CFG['name']} fold {fold} | val macro AUC (TTA) {va_auc:.4f} | gold macro AUC, this fold alone {gold_auc:.4f} | "
-    f"{(time.time() - t_job) / 60:.0f} min")
+log(f"DONE {CFG['name']} fold {fold} | val macro AUC ({'TTA' if TTA else 'no TTA'}) {va_auc:.4f} | "
+    f"gold macro AUC, this fold alone {gold_auc:.4f} | {(time.time() - t_job) / 60:.0f} min")
 '''
 WORKER = WORK / "knee_train_worker.py"
 WORKER.write_text(WORKER_SRC)
@@ -579,7 +716,7 @@ def run_jobs(jobs):
 # Reuse folds finished in an earlier run: if an attached dataset has a folder with the same group name and the same
 # training settings, its fold files are copied into this run's output and those folds are not trained again.
 SAME_KEYS = ["backbone", "roles", "n_triplets", "epochs", "batch_size", "lr", "weight_decay", "warmup_epochs",
-             "drop_path", "seed", "labels_file", "depth", "img", "crop_mm"]
+             "drop_path", "seed", "labels_file", "depth", "img", "crop_mm", "canonical_side", "mirror_aug", "tta"]
 
 def job_cfg(job):
     return {**BASE, **job, "labels_file": LABELS_CSV.name, "depth": DEPTH, "img": IMG, "crop_mm": CACHE_CFG.get("CROP_MM")}
@@ -608,7 +745,26 @@ for cfg_path in find_all("train_config.json"):
         JOBS.append({"name": name, "fold": k, "reused": True})          # so section 7 knows the group
 print("reused from attached datasets:", reused or "nothing")
 
-status = run_jobs([j for j in JOBS if not j.get("reused")])
+# The side job: reuse an attached `side.csv` (+ model) when one exists, otherwise run it first and alone, because the
+# canonical groups read its output before they start.
+SIDE_FILES = ["side.csv", "side_model.pt", "side_config.json"]
+side_jobs = [j for j in JOBS if j.get("side")]
+needs_side = any(j.get("canonical_side") for j in JOBS if "fold" in j)
+_old_side = [p for p in find_all("side.csv") if (p.parent / "side_model.pt").exists()]
+if (side_jobs or needs_side) and _old_side and not (OUT_DIR / "side" / "side.csv").exists():
+    (OUT_DIR / "side").mkdir(parents=True, exist_ok=True)
+    for f in SIDE_FILES:
+        if (_old_side[0].parent / f).exists():
+            shutil.copy(_old_side[0].parent / f, OUT_DIR / "side" / f)
+    print(f"reused side classifier from {_old_side[0].parent}")
+    side_jobs = []
+elif side_jobs:
+    print(run_jobs(side_jobs).to_string())
+if needs_side:
+    assert (OUT_DIR / "side" / "side.csv").exists(), "the side job failed and the canonical groups cannot run"
+    print(pd.read_csv(OUT_DIR / "side" / "side.csv").groupby(["source", "side"]).size().to_string())
+
+status = run_jobs([j for j in JOBS if not j.get("reused") and not j.get("side")])
 print(status.to_string())
 
 # %% [markdown]
@@ -636,7 +792,7 @@ def auc_table(pred, target):
 pool_y = pool.set_index("StudyInstanceUID")[LABELS]
 gold_y = gold_df[LABELS].to_numpy(dtype=float)
 compare, gold_by_group = {}, {}
-for name in dict.fromkeys(j["name"] for j in JOBS if "bench" not in j):
+for name in dict.fromkeys(j["name"] for j in JOBS if "bench" not in j and not j.get("side")):
     d = OUT_DIR / name
     oof_files = sorted(d.glob("oof_fold*.csv"))
     if not oof_files:
@@ -661,6 +817,10 @@ for name in dict.fromkeys(j["name"] for j in JOBS if "bench" not in j):
     cfg.update(group_name=name, labels=LABELS, labels_file=LABELS_CSV.name, depth=DEPTH, img=IMG,
                crop_mm=CACHE_CFG.get("CROP_MM"), mean=0.45, std=0.225, channels_last=N_GPU > 0,
                trained_folds=folds, gold_macro_auc=float(table.loc["macro", "GOLD (folds above)"]))
+    if cfg.get("canonical_side"):               # the submission needs the side classifier next to the group's models
+        for f in ["side_model.pt", "side_config.json"]:
+            shutil.copy(OUT_DIR / "side" / f, d / f)
+        cfg["side_model"] = "side_model.pt"
     (d / "train_config.json").write_text(json.dumps(cfg, indent=1))
     oof.to_csv(d / "oof_predictions.csv", index=False)
     pd.DataFrame(gens, columns=LABELS).assign(StudyInstanceUID=gold_df.StudyInstanceUID.values).to_csv(d / "gold_predictions.csv", index=False)

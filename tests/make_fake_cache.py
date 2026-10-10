@@ -28,6 +28,11 @@ def make(root, n=60, img=64, crop_mm=140.0, depth=24, shard_size=25, seed=0):
     lab["is_gold"] = [i < 6 for i in range(n)]
     lab["language"] = rng.choice(["en", "es", "de", "tr", "fr", "nl", "ru"], n)
     lab.to_csv(root / "labels" / "labels_v4.csv", index=False)
+    # Every fake knee has a side: a bright block near the patient-left edge of coronal/axial images and in the last
+    # (left-most) sagittal slices for a left knee, mirrored for a right knee. Laterality is tagged for ~70 % of studies.
+    side = rng.choice(["L", "R"], n)
+    tag = np.where(rng.random(n) < 0.7, side, None)
+    tag[::23] = "B"                                       # a few odd tag values the notebook must ignore
     rows = []
     for s0 in range(0, n, shard_size):
         name = f"shard_{s0 // shard_size:03d}.npz"
@@ -36,10 +41,20 @@ def make(root, n=60, img=64, crop_mm=140.0, depth=24, shard_size=25, seed=0):
             for role in ROLES:
                 ok = not (role == "ax_fs" and i % 7 == 3)
                 if ok:
-                    arrs[f"{ids[i]}__{role}"] = rng.integers(0, 255, (depth, img, img), dtype=np.uint8)
+                    a = rng.integers(0, 120, (depth, img, img), dtype=np.uint8)
+                    q = max(2, img // 4)
+                    if role == "sag_fs":
+                        sl = slice(depth - depth // 4, depth) if side[i] == "L" else slice(0, depth // 4)
+                        a[sl, q:-q, q:-q] = 230
+                    else:
+                        cs = slice(img - q, img) if side[i] == "L" else slice(0, q)
+                        a[:, q:-q, cs] = 230
+                    arrs[f"{ids[i]}__{role}"] = a
                 rows.append({"StudyInstanceUID": ids[i], "role": role, "ok": ok, "shard": name,
-                             "manufacturer": rng.choice(["SIEMENS", "GE MEDICAL", "Philips"])})
+                             "manufacturer": rng.choice(["SIEMENS", "GE MEDICAL", "Philips"]),
+                             "laterality": tag[i], "x_center": (30 if side[i] == "L" else -30) + rng.normal(0, 25)})
         np.savez_compressed(cache / name, **arrs)
+    pd.DataFrame({"StudyInstanceUID": ids, "true_side": side}).to_csv(root / "true_side.csv", index=False)
     pd.DataFrame(rows).to_csv(cache / "index.csv", index=False)
     (cache / "config.json").write_text(json.dumps({"ROLES": ROLES, "DEPTH": depth, "IMG": img, "CROP_MM": crop_mm}))
     (root / "knee_preproc.py").write_text("# stub\n")

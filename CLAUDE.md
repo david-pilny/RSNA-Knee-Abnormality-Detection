@@ -1,10 +1,13 @@
 # CLAUDE.md: RSNA Knee Abnormality Detection (Kaggle 2026)
 
-Hand-off notes for continuing this project in a new session. Last updated **5 Oct 2026**.
+Hand-off notes for continuing this project in a new session. Last updated **10 Oct 2026**.
 
 **Where we are:** David chose to build on the public 0.94 notebook (`DECISION.md` records the decision and its outcome). The fork
-alone scores **0.943**; our own models add nothing to it at the moment (§6.5). **5 Oct: decided to make our member much stronger
-(v5 cache + v5 training on both GPUs, §7).**
+alone scores **0.943**; our own models (v5: 0.918 alone) add nothing to it (§6.5). Resolution is exhausted (320 px: +0.003 val).
+**10 Oct: canonical knee side (v7, §7) tested on fold 0 — no gain (B0 +0.001, ConvNeXt −0.007 val): stopped.** Every
+model-side lever (labels, resolution, side, backbone) has now been measured at ≤ +0.003. What remains: pick the two finals
+(fork 0.943 + our fast v5 pipeline for the Efficiency track), and the signed-in forum reads (§6.7, §7 open items).
+The public landscape moved: a public **0.949 single CoAtNet** thread exists (§6.7).
 
 ---
 
@@ -26,10 +29,15 @@ alone scores **0.943**; our own models add nothing to it at the moment (§6.5). 
   that compartment; Effusion and Baker's: moderate or large only; Contusion: impact marrow edema without a fracture line;
   Fracture: acute cortical break / fracture line. Gold is ~3× enriched in positives compared with the corpus.
 - **Deadlines:** entry / team merge **15 Oct 2026**, final submission **22 Oct 2026**. Kaggle lets you pick 2 final submissions.
-- **Leaderboard (5 Oct):** our best **0.943** public = the forked public notebook, with or without our member (§6.5). Our own
-  pipeline alone: 0.906. Top of LB 0.961, 0.954+ is private work.
+- **Leaderboard (10 Oct, read signed-out in Chrome):** our best **0.943** public = the forked public notebook, with or without
+  our member (§6.5); **rank 1,758 / 5,658**, 14 entries. Our own pipeline alone: 0.918 (v5). Top of LB 0.964, top 49 all
+  ≥ 0.958; bronze (top 10 % ≈ rank 566) probably needs ≈ 0.95+. Public LB = ~30 % of the test set (~390 studies): ±0.005 is noise.
   The LB is crowded at ~0.94 because the **public notebooks are forks of one inference notebook with published weights**
-  (§6.6). Rank at 0.882 was 3,239 / 4,750; not re-checked since.
+  (§6.6); since early Oct a public **0.949 single-CoAtNet** thread exists (§6.7).
+- **Efficiency track** (separate prizes $7k/$6k/$5k): `Efficiency = AUC/(Benchmark − maxAUC) + Runtime/32400`, minimised on
+  the private set → ≈ `−2.16·AUC + runtime_h/9`: **one hour of runtime costs 0.05 AUC**. The submission must be one of the two
+  selected finals and beat `sample_submission`. Our v5 pipeline (0.918, ~1 h?) scores ≈ −1.87 vs ≈ −1.38 for the 6 h public fork.
+  The host publishes a daily "Efficiency Leaderboard" notebook (ranks only). Not yet checked for our rank.
 
 ## 2. Hard rules / constraints
 
@@ -243,8 +251,54 @@ Effusion 0.952 → 0.955, Synovitis 0.740 → 0.711, Baker's 0.976 → 0.980, Co
   `ShivenKhurana1/rsna-knee-abnormality`, `Daniel766hi/RSNA`; Hugging Face blog `bishnoiyash/rsna-competetion`.
 - The copy of the competition rules in one of these repos allows external data and models that are "reasonably accessible
   to all"; some public label tables were made with hosted LLMs by their authors.
+- **Forum, 10 Oct (titles only; threads could not be opened signed-out):** "Reaching 0.949 with one CoAtNet: labels, native
+  crops, and anatomical mirroring" (39 comments) and "Does using the 0.949 weights count as a violation?" → public 0.949
+  weights exist, the 0.943 fork is probably no longer the best public base. "8 public LLM label sets vs gold-58: 11 of 12
+  findings show no clear difference" (labels saturated). "Please clarify which external knee MRI datasets are allowed"
+  (88 votes, active) and "are public weights trained on OAI knee MRI allowed?" → unresolved rules question about public
+  weights. Pinned host threads: "Knee Abnormality Detection AI Challenge Overview" (**this is where the label thresholds
+  of §1 live**; not on the Overview/Data pages) and "Use of Commercially Hosted LLMs" (the host's position on rule 4.b).
+  David should read these three signed in.
 
 ## 7. Next steps
+
+**10 Oct: v7 = canonical knee side** (`rsna_knee_train_v5.py`, default `JOBS`; submission + member cell updated, tested on fake data).
+Idea: mirror augmentation (p = 0.5) + mirror TTA made the model side-blind, yet 4 of 12 targets are side-specific
+(Medial/Lateral Meniscus, Medial/Lateral OA) and our weakest findings are Lateral Meniscus (0.78) and Lateral OA (0.82).
+The public 0.949 thread lists "anatomical mirroring" as one of its three ingredients.
+- **Side job** `{"name": "side", "side": True}` (runs first, alone, ~15 min): trains a left/right `KneeNet` (B0, 1 output,
+  3 epochs) on the studies with a DICOM `Laterality` tag (cache `index.csv`; coverage unknown until the run prints it —
+  the job needs ≥ 30 tagged studies per side), half of every batch mirrored with the target swapped; predicts all studies
+  with the antisymmetric average `(f(x) + 1 − f(mirror x)) / 2`; prints hold-out accuracy and the sign-of-x-position
+  agreement; writes `side/side.csv`, `side_model.pt`, `side_config.json`. Reused from an attached dataset in later sessions.
+- **Groups `v7_b0`, `v7_cnxn`** (`canonical_side="R"`, `mirror_aug=False`, `tta=False`): left knees are mirrored in the
+  loader (`need_flip`), single-view predictions. `train_config.json` carries these keys plus `side_model`; the side model
+  is copied into each group folder. `SAME_KEYS` includes them, so old folds are not reused by mistake.
+- **Submission / member cell:** a group with `canonical_side` loads its `side_model.pt`, decides each test study's side
+  (same antisymmetric average), mirrors the left knees, predicts one view; other groups unchanged. Section 6 prints the
+  side distribution and the share of uncertain studies (|p − 0.5| < 0.1).
+- **Decision rule:** session 1 = side job + fold 0 of both groups (~1.3 h wall, ~2.1 GPU h). Compare with the 256 px fold 0
+  (B0 0.8607, CNXN 0.8568 val, mirror TTA), especially Lateral Meniscus / Lateral OA. If the side classifier is weak
+  (hold-out accuracy < ~0.97) the experiment is inconclusive, not negative. Gain ≥ +0.005 macro or ≥ +0.02 on the lateral
+  findings → folds 1–4 (~4 GPU h on both T4s) → own submission (also the Efficiency-track candidate) → fork + member at 0.25.
+- Local test settings (this Mac: 35 s/step at 64 px on CPU!): fake cache 48 studies at 32 px, `n_triplets=2`, 1–2 epochs.
+  `tests/make_fake_cache.py` now gives every fake knee a side (bright block on the side-specific edge, `true_side.csv`),
+  tags ~70 % of them (`laterality`, with a few odd `B` values) and stores `x_center`. Tested 10 Oct: training notebook
+  (side job + `v7_b0` fold 0; the fake side model outputs a constant, so its p_left is 0.5 — random-init B0 after 20 CPU
+  steps, the mirror logic itself was checked directly), submission notebook with the canonical group, member-cell harness
+  with a canonical + a plain group (all 3 cases pass). `kaggle_upload/*.ipynb` rebuilt.
+- **Kaggle run (session 1):** notebook `rsna_knee_train_v5` with inputs `knee-report-labels-v4` + `knee-mri-cache` (latest =
+  256 px version), GPU T4 ×2, Internet on. Read first: the Laterality coverage line (section 3), then the side job's
+  hold-out accuracy; if coverage is tiny the job stops with "too few tagged studies" and a side heuristic is needed instead.
+- **Result (10 Oct, 1.32 h wall / 2.1 GPU h): stop rule fired.** Side classifier is reliable: Laterality tagged on 49.8 %
+  of studies (1,088 L / 1,108 R), hold-out accuracy **0.988** (AUC 0.989), 0.1 % of untagged studies uncertain, 11 min;
+  the sign of the x-position agrees with the tag in only 94 % (not a usable shortcut). Fold 0 vs the 256 px run (same folds):
+  v7_b0 val **0.8616** (no TTA) vs 0.8607 (TTA), gold 0.889 vs 0.886 — a wash: canonical single-view = old model with TTA.
+  v7_cnxn val **0.8497** vs 0.8568, gold 0.885 vs 0.898 — clearly worse (mirror augmentation regularised the larger
+  backbone). Gold Lateral Meniscus B0 0.876 → 0.850; blend gold 0.903 → 0.8965. Side-blindness does not limit the lateral
+  findings. Folds 1–4 not run. Output of the run: `side/`, `v7_b0/`, `v7_cnxn/` (fold 0 only) — keep as a dataset only if
+  the side classifier is ever needed for something else. Lesson for §8: the v7 code paths stay in the notebook (defaults
+  `mirror_aug=True, tta=True, canonical_side=None` reproduce the old behaviour); set `JOBS` back before any other run.
 
 **Decided 5 Oct: option (a), go all in on our own member** (30 GPU h left this week), then blend it into the fork the same
 way as before (§6.6). Files for it (tested locally on fake data, Windows `.venv` now set up with `uv`):
@@ -285,7 +339,16 @@ Further levers if time allows: larger backbone, more epochs, a 4th series (sagit
   hedge that differs slightly). Don't tune `OUR_WEIGHT` further; the public LB cannot resolve it and that is how forks overfit.
 
 Other open items:
-- Verify the host label thresholds against the Kaggle overview page (§1) — still unchecked.
+- Verify the host label thresholds (§1): they are in the pinned forum thread "Knee Abnormality Detection AI Challenge
+  Overview", not on the Overview/Data pages — still unchecked (needs a signed-in session).
+- Efficiency track (§1): find our rank in the host's efficiency-leaderboard notebook and the full-test runtime of the v5
+  submission (shown on the submissions page). **Recommendation (10 Oct): finals = unchanged fork (0.943) + own v5
+  submission (0.918) for the Efficiency track** instead of the fork+0.25 hedge (same private score, no upside). If the
+  v5 runtime is dominated by the models rather than DICOM decoding, a B0-only, no-TTA variant (v7 showed single-view B0
+  loses nothing) is the cheapest way to cut it; check the runtime split in the submission log first.
+- Check the Code tab sorted by score for a public notebook > 0.943 (the 0.949 thread) and the external-data rules thread
+  before building finals on new public weights.
+- Housekeeping: branch `blend-submission-and-notes` carries everything since 2 Oct and is not merged into `main`.
 - `rsna_knee_report_labeler_v4.py` MCL wording is too strict; only relevant if a labeller rerun happens.
 - GPU quota: the labeller and two five-fold runs used most of one week; check what is left before planning (a).
 - Final week: runtime check of the chosen submissions; pick 2 final submissions on Kaggle before 22 Oct.
@@ -307,3 +370,5 @@ Other open items:
 - Submitting a version whose commit run failed wastes a submission: the scoring run fails too, but only after ~6 h.
 - With 58 gold studies, per-finding differences below ~0.05 and macro differences below ~0.02 are noise; use out-of-fold
   predictions on the 4,349 report-labelled studies for a second opinion.
+- Mirror augmentation is regularisation, not just side-blindness: removing it (canonical side, v7) cost ConvNeXt-Nano
+  0.007 val AUC and gained B0 nothing. A one-fold, ~2 GPU h test with a written stop rule settled this cheaply.

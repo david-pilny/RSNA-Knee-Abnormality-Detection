@@ -263,30 +263,73 @@ def prepare(x_u8, cfg):
     x = x_u8.to(DEVICE).float() / 255.0
     return (make_triplets(x, cfg["n_triplets"]) - cfg["mean"]) / cfg["std"]
 
-def mirror(x_u8):
-    # the same "other knee" mirror used as training augmentation
+def mirror(x_u8, sel=None):
+    # the same "other knee" mirror used as training augmentation; sel = bool tensor of the studies to mirror (default all)
     x = x_u8.clone()
+    sel = slice(None) if sel is None else sel
     for j, role in enumerate(ROLES):
-        x[:, j] = x[:, j].flip(1) if role.startswith("sag") else x[:, j].flip(3)
+        x[sel, j] = x[sel, j].flip(1) if role.startswith("sag") else x[sel, j].flip(3)
     return x
 
+def load_model(path, backbone, n_roles, n_out=12):
+    m = KneeNet(backbone, False, n_roles, n_out).to(DEVICE)
+    m.load_state_dict({k: v.float() for k, v in torch.load(path, map_location=DEVICE).items()})
+    if CHANNELS_LAST:
+        m = m.to(memory_format=torch.channels_last)
+    return m.eval()
+
+# Canonical-side groups (v7): trained with every knee shown as a right knee, without mirror augmentation or TTA. Such a
+# group ships the left/right classifier it was built with (`side_model.pt`); at test time the classifier decides the
+# side of each study, left knees are mirrored, and the group predicts the single canonical view.
+side_models = {}                                              # one classifier per distinct file (groups share it)
 for g in GROUPS:
     g["role_idx"] = [ROLES.index(r) for r in g["cfg"]["roles"]]         # this group's series among the preprocessed ones
-    g["models"] = []
-    for f in g["files"]:
-        m = KneeNet(g["cfg"]["backbone"], False, len(g["cfg"]["roles"])).to(DEVICE)
-        m.load_state_dict({k: v.float() for k, v in torch.load(f, map_location=DEVICE).items()})
-        if CHANNELS_LAST:
-            m = m.to(memory_format=torch.channels_last)
-        g["models"].append(m.eval())
-    print(f"group '{g['name']}': loaded {len(g['models'])} model(s) on {DEVICE}")
+    g["models"] = [load_model(f, g["cfg"]["backbone"], len(g["cfg"]["roles"])) for f in g["files"]]
+    g["canon"] = g["cfg"].get("canonical_side")
+    g["tta"] = USE_TTA and g["cfg"].get("tta", True)
+    if g["canon"]:
+        sp = g["dir"] / g["cfg"].get("side_model", "side_model.pt")
+        scfg = json.loads((g["dir"] / "side_config.json").read_text())
+        key = (sp.stat().st_size, scfg["backbone"], tuple(scfg["roles"]))
+        if key not in side_models:
+            side_models[key] = dict(model=load_model(sp, scfg["backbone"], len(scfg["roles"]), 1), cfg=scfg,
+                                    role_idx=[ROLES.index(r) for r in scfg["roles"]])
+        g["side"] = side_models[key]
+    print(f"group '{g['name']}': loaded {len(g['models'])} model(s) on {DEVICE}" +
+          (f" | canonical side {g['canon']} (side classifier {g['side']['cfg']['backbone']}, "
+           f"hold-out accuracy at training {g['side']['cfg'].get('holdout_accuracy')})" if g["canon"] else "") +
+          f" | mirror TTA {g['tta']}")
+side_log = []                                                 # p_left per study, for section 6
+
+@torch.no_grad()
+def side_p_left(x_u8, rmask, s):
+    # antisymmetric average: p = (f(x) + 1 - f(mirror x)) / 2, exactly as in the side job
+    rm = rmask[:, s["role_idx"]].to(DEVICE)
+    out = 0
+    for flip in (False, True):
+        v = mirror(x_u8) if flip else x_u8
+        x = prepare(v[:, s["role_idx"]], s["cfg"])
+        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=DEVICE == "cuda"):
+            p = torch.sigmoid(s["model"](x, rm).float())[:, 0]
+        out = out + (1 - p if flip else p)
+    return 0.5 * out
 
 @torch.no_grad()
 def predict_batch(x_u8, rmask):
-    # → array (groups, studies, findings): inside a group, the mean over its fold models and the two views
-    views = [x_u8, mirror(x_u8)] if USE_TTA else [x_u8]
-    out = []
+    # → array (groups, studies, findings): inside a group, the mean over its fold models and its view(s)
+    out, canon_views = [], {}
     for g in GROUPS:
+        if g["canon"]:
+            key = id(g["side"])
+            if key not in canon_views:
+                p_left = side_p_left(x_u8, rmask, g["side"])
+                side_log.extend(p_left.cpu().numpy().tolist())
+                need_flip = (p_left > 0.5) if g["canon"] == "R" else (p_left <= 0.5)
+                canon_views[key] = mirror(x_u8, need_flip.cpu()) if bool(need_flip.any()) else x_u8
+            base = canon_views[key]
+        else:
+            base = x_u8
+        views = [base, mirror(base)] if g["tta"] else [base]
         rm, probs = rmask[:, g["role_idx"]].to(DEVICE), []
         for v in views:
             x = prepare(v[:, g["role_idx"]], g["cfg"])
@@ -370,6 +413,11 @@ if len(meta_df):
     if IS_RERUN and RAISE_IF_DECODE_FAIL is not None and decode_fail > RAISE_IF_DECODE_FAIL:
         raise RuntimeError(f"decode failure rate {decode_fail:.1%} > {RAISE_IF_DECODE_FAIL:.0%} (diagnostic stop)")
 print("studies falling back to the prior:", len(studies) - len(preds))
+if side_log:
+    sl = np.asarray(side_log)
+    print(f"knee side (canonical groups): {len(sl)} studies | left {np.mean(sl > 0.5):.1%} | "
+          f"uncertain (|p - 0.5| < 0.1): {np.mean(np.abs(sl - 0.5) < 0.1):.1%} | "
+          f"p_left quantiles 5/50/95 %: {np.percentile(sl, [5, 50, 95]).round(3).tolist()}")
 
 # %% [markdown]
 # ## 7. Final submission
@@ -378,7 +426,8 @@ print("studies falling back to the prior:", len(studies) - len(preds))
 sub = make_submission(preds)
 validate_and_write(sub)
 print(f"total runtime {(time.time() - T_START) / 60:.1f} min | models " +
-      ", ".join(f"{g['name']}: {len(g['models'])}" for g in GROUPS) + f" | TTA {USE_TTA}")
+      ", ".join(f"{g['name']}: {len(g['models'])}{' canonical ' + g['canon'] if g['canon'] else ''}" for g in GROUPS) +
+      f" | TTA {[g['tta'] for g in GROUPS]}")
 sub.head()
 
 # %% [markdown]
