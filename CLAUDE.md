@@ -5,7 +5,9 @@ Hand-off notes for continuing this project in a new session. Last updated **10 O
 **Where we are:** David chose to build on the public 0.94 notebook (`docs/DECISION.md` records the decision and its outcome). The fork
 alone scores **0.943**; our own models (v5: 0.918 alone) add nothing to it (§6.5). Resolution is exhausted (320 px: +0.003 val).
 **10 Oct: canonical knee side (v7, §7) tested on fold 0 — no gain (B0 +0.001, ConvNeXt −0.007 val): stopped.** Every
-model-side lever (labels, resolution, side, backbone) has now been measured at ≤ +0.003. What remains: pick the two finals
+model-side lever (labels, resolution, side, backbone) has now been measured at ≤ +0.003. **Last experiment, chosen by
+David on 10 Oct: v8 = a second model on a joint-region crop (90 mm at 256 px, §7)**, blended per finding with the
+whole-knee v5 models; code done and tested locally, the Kaggle cache run is next. In parallel: pick the two finals
 (fork 0.943 + our fast v5 pipeline for the Efficiency track), and the signed-in forum reads (§6.7, §7 open items).
 The public landscape moved: a public **0.949 single CoAtNet** thread exists (§6.7).
 
@@ -298,6 +300,34 @@ The public 0.949 thread lists "anatomical mirroring" as one of its three ingredi
   findings. Folds 1–4 not run. Output of the run: `side/`, `v7_b0/`, `v7_cnxn/` (fold 0 only) — keep as a dataset only if
   the side classifier is ever needed for something else. Lesson for §8: the v7 code paths stay in the notebook (defaults
   `mirror_aug=True, tta=True, canonical_side=None` reproduce the old behaviour); set `JOBS` back before any other run.
+
+**10 Oct, v8 = joint-region crop (the last experiment; 12 days and ~30 GPU h left).** Why: the gap to the public
+0.949 single model is input and capacity (384 px, 5 series, 64 slices, CoAtNet-2), not labels; the one reachable rung on
+T4s is a second model that sees the joint line at close to native resolution and adds *input* diversity to the blend
+(backbone diversity gave +0.005–0.01 on gold, resolution alone +0.004). Expected: +0.005–0.015 own LB (0.918 → ~0.925–0.93),
+probably still not enough to lift the fork. Targets: Medial/Lateral Meniscus, Medial/Lateral OA, ACL, MCL; the joint crop
+loses the patella, shafts and posterior soft tissue by design, so PF OA, Baker's, effusion, synovitis, contusion and
+fracture stay with the 140 mm models via per-finding `BLEND_WEIGHTS`.
+- **Cache:** `notebooks/rsna_knee_preprocess_cache_v5.py`, defaults now `IMG=256, CROP_MM=90, PART="1/1"` → new dataset
+  **`knee-mri-cache-joint`** (CPU, Internet on, ~1.5–2 h; one part fits). The window is centred on the tissue box as
+  before; **David checks section 5's pictures: both menisci and both tibiofemoral compartments inside on every sagittal
+  and coronal sample.** If the joint sits off-centre in several samples → `CROP_MM=100` and rerun.
+- **Training:** `notebooks/rsna_knee_train_v5.py`, default `JOBS` = `v8_joint_cnxn` + `v8_joint_b0`, fold 0 (~1.1 h wall,
+  ~2 GPU h). Inputs: `knee-report-labels-v4` + **only** `knee-mri-cache-joint` (training joins every attached cache and
+  refuses mixed crops). `train_config.json` records `crop_mm = 90`.
+- **Decision rule (fold 0 vs 256 px/140 mm: B0 0.8607, CNXN 0.8568 val):** look at the per-finding table, not the macro.
+  Go on (folds 1–4, ~4 GPU h) if the joint model gains ≥ +0.02 val AUC on the menisci or the tibiofemoral OA, or if the
+  per-finding best-of-two beats the 140 mm model by ≥ +0.005 macro. Then: own submission with both v5 groups + both v8
+  groups and per-finding weights fitted on the out-of-fold predictions (download `oof_predictions.csv`, numbers only;
+  fit with `analysis/`), then fork + member at 0.25 if the own LB reaches ~0.93.
+- **Submission / member cell (done, tested locally 10 Oct):** every group carries `crop_mm`; the test DICOMs are decoded
+  once per study and resampled once per distinct crop (`process_study_crops`, built from `knee_preproc`'s primitives —
+  `select_series`, `load_series`, `canonicalize`, `normalize_u8`, `resample(crop_mm=…)`); each group predicts on its own
+  crop; only **one** cropped cache dataset needs to be attached (for `knee_preproc.py`; the old uncropped 224 px module is
+  refused). Section 6 prints the median tissue outside each crop. Local test: groups at 140 mm, 140 mm canonical and
+  90 mm together (submission notebook + member harness, 3/3 pass); crops verified to differ on a 200 mm field of view.
+- Timeline: cache 11 Oct → fold 0 11–12 Oct → folds 1–4 by 14 Oct → own submission scored ~15 Oct → fork + member
+  scored ~17 Oct → finals chosen by 20 Oct with margin.
 
 **Decided 5 Oct: option (a), go all in on our own member** (30 GPU h left this week), then blend it into the fork the same
 way as before (§6.6). Files for it (tested locally on fake data, Windows `.venv` now set up with `uv`):

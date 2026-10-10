@@ -19,9 +19,13 @@
 # are averaged). With one group the notebook behaves as before. With several, the groups are blended **by rank**
 # (section 2 explains why), with an optional weight per group and finding.
 #
-# **Inputs to attach:** the competition data, one or more model datasets (weights + `train_config.json`), `knee-mri-cache`
-# (only for `knee_preproc.py` and its `config.json`; the 10 GB of shards are not read), and `knee-dicom-wheels`
-# (offline DICOM decoders).
+# **Two crops (v8).** A group's `train_config.json` records the crop its cache was built with (`crop_mm`: 140 for the
+# whole-knee models, 90 for the joint-region models). The DICOMs are decoded once per study and resampled once per
+# distinct crop, so attaching both kinds costs decoding nothing extra; each group predicts on its own crop.
+#
+# **Inputs to attach:** the competition data, one or more model datasets (weights + `train_config.json`), **one** cache
+# dataset (only for `knee_preproc.py` and its `config.json`; the shards are not read; any cropped cache will do, the crop
+# itself comes from each group), and `knee-dicom-wheels` (offline DICOM decoders).
 # **Settings:** Accelerator **GPU T4 ×2** (one GPU is used), Internet **off** (required for submission).
 #
 # Safety rules carried over from the dummy submission: a valid `submission.csv` is written **first**; every study is
@@ -93,11 +97,14 @@ print("competition :", ROOT)
 print("preprocess  :", PREPROC_DIR, "| DEPTH", CACHE_CFG["DEPTH"], "| IMG", CACHE_CFG["IMG"])
 assert GROUPS, "no train_config.json with model_fold*.pt found: is a models dataset attached?"
 for g in GROUPS:
-    print(f"model group '{g['name']}': {g['dir']} | {g['cfg']['backbone']} | roles {g['cfg']['roles']} | "
+    g["crop"] = float(g["cfg"].get("crop_mm") or CACHE_CFG.get("CROP_MM") or 0)   # 0 = whole field of view (first cache)
+    print(f"model group '{g['name']}': {g['dir']} | {g['cfg']['backbone']} | roles {g['cfg']['roles']} | crop {g['crop']:g} mm | "
           f"{[f.name for f in g['files']]} | gold AUC at training {g['cfg'].get('gold_macro_auc', float('nan')):.3f}")
     assert g["cfg"].get("depth", CACHE_CFG["DEPTH"]) == CACHE_CFG["DEPTH"] and g["cfg"].get("img", CACHE_CFG["IMG"]) == CACHE_CFG["IMG"], \
         "this group was trained on another cache shape than knee_preproc produces"
 G = len(GROUPS)
+CROPS = sorted({g["crop"] for g in GROUPS})                   # each test study is resampled once per crop
+print("crops to preprocess (mm):", CROPS)
 
 # %% [markdown]
 # ## 2. CSVs, prior, and the safety-net submission
@@ -215,6 +222,36 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 sys.path.insert(0, str(PREPROC_DIR))
 os.environ["PYTHONPATH"] = str(PREPROC_DIR) + os.pathsep + os.environ.get("PYTHONPATH", "")   # for the parallel workers
 import knee_preproc as kp
+import inspect
+assert "crop_mm" in inspect.signature(kp.resample).parameters, "attach a cropped cache (v5 or later): its knee_preproc.py takes crop_mm"
+
+def process_study_crops(study_uid, study_rows, series_root, roles, depth, img, crops):
+    # kp.process_study, but the decoded series is resampled once per crop: ({crop: {role: uint8 array or None}}, metas)
+    torch.set_num_threads(1)
+    arrays, metas = {c: {} for c in crops}, []
+    for role, (plane, fluid) in roles.items():
+        m = {"StudyInstanceUID": study_uid, "role": role, "ok": False, "error": None}
+        t0 = time.time()
+        try:
+            best, fallback = kp.select_series(study_rows, plane, fluid, Path(series_root) / study_uid)
+            if best is None:
+                raise LookupError(f"no {plane} series")
+            m.update(SeriesInstanceUID=best.SeriesInstanceUID, fallback=fallback, n_files=int(best.n_files))
+            vol, hdr, pos = kp.load_series(Path(series_root) / study_uid / best.SeriesInstanceUID, kp.GEOMETRY[plane]["slice_axis"])
+            m.update(n_slices=vol.shape[0], transfer_syntax=hdr.file_meta.TransferSyntaxUID.name)
+            vol, ps = kp.canonicalize(vol, hdr, plane)
+            vol01 = kp.normalize_u8(vol)
+            for c in crops:
+                arrays[c][role], info = kp.resample(vol01, ps, depth, img, crop_mm=c)
+                m[f"tissue_outside_{c:g}"] = info.get("tissue_outside")
+            m["ok"] = True
+        except Exception as e:
+            for c in crops:
+                arrays[c][role] = None
+            m["error"] = f"{type(e).__name__}: {str(e)[:160]}"
+        m["seconds"] = round(time.time() - t0, 2)
+        metas.append(m)
+    return arrays, metas
 
 import torch, torch.nn as nn, timm
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -315,12 +352,14 @@ def side_p_left(x_u8, rmask, s):
     return 0.5 * out
 
 @torch.no_grad()
-def predict_batch(x_u8, rmask):
-    # → array (groups, studies, findings): inside a group, the mean over its fold models and its view(s)
+def predict_batch(xs, rmask):
+    # xs: {crop: uint8 tensor (studies, roles, DEPTH, IMG, IMG)} → array (groups, studies, findings): inside a group,
+    # the mean over its fold models and its view(s), on the crop it was trained with
     out, canon_views = [], {}
     for g in GROUPS:
+        x_u8 = xs[g["crop"]]
         if g["canon"]:
-            key = id(g["side"])
+            key = (id(g["side"]), g["crop"])
             if key not in canon_views:
                 p_left = side_p_left(x_u8, rmask, g["side"])
                 side_log.extend(p_left.cpu().numpy().tolist())
@@ -342,8 +381,8 @@ def predict_batch(x_u8, rmask):
 # %% [markdown]
 # ## 5. Preprocess and predict, chunk by chunk
 #
-# Studies go through in chunks of `CHUNK`: the 4 CPUs preprocess a chunk in parallel (DICOM decoding is the slow part),
-# then the GPU predicts it. Per study and role we keep a small log (ok, error, transfer syntax) for section 6.
+# Studies go through in chunks of `CHUNK`: the 4 CPUs preprocess a chunk in parallel (DICOM decoding is the slow part;
+# a second crop only adds a cheap resample), then the GPU predicts it, each group on its crop. Per study and role we keep a small log (ok, error, transfer syntax) for section 6.
 # Every few chunks the submission file is rewritten, so even a crash late in the run leaves real predictions behind.
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
@@ -355,9 +394,9 @@ roles_used = {r: ROLES_ALL[r] for r in ROLES}
 
 def run(study):
     try:
-        return kp.process_study(study, rows_of.get(study, test_series.iloc[:0]), SERIES_ROOT, roles_used, DEPTH, IMG)
+        return process_study_crops(study, rows_of.get(study, test_series.iloc[:0]), SERIES_ROOT, roles_used, DEPTH, IMG, CROPS)
     except Exception as e:
-        return {r: None for r in ROLES}, [{"StudyInstanceUID": study, "role": "all", "ok": False, "error": repr(e)[:200]}]
+        return {c: {r: None for r in ROLES} for c in CROPS}, [{"StudyInstanceUID": study, "role": "all", "ok": False, "error": repr(e)[:200]}]
 
 studies = sample[ID_COL].tolist()
 preds, metas, t0 = {}, [], time.time()
@@ -368,18 +407,20 @@ for c in range(0, len(studies), CHUNK):
         res = Parallel(n_jobs=n_jobs)(delayed(run)(s) for s in chunk)
     except Exception:
         traceback.print_exc(); continue
-    X = np.zeros((len(chunk), len(ROLES), DEPTH, IMG, IMG), np.uint8)
-    RM = np.zeros((len(chunk), len(ROLES)), np.float32)
+    X = {cr: np.zeros((len(chunk), len(ROLES), DEPTH, IMG, IMG), np.uint8) for cr in CROPS}
+    RM = np.zeros((len(chunk), len(ROLES)), np.float32)   # a role is present for all crops or for none
     for i, (arrs, meta) in enumerate(res):
         metas += meta
         for j, role in enumerate(ROLES):
-            if arrs.get(role) is not None:
-                X[i, j] = arrs[role]; RM[i, j] = 1
+            if arrs[CROPS[0]].get(role) is not None:
+                for cr in CROPS:
+                    X[cr][i, j] = arrs[cr][role]
+                RM[i, j] = 1
     keep = RM.sum(1) > 0                                    # studies with at least one usable series
     try:
         for b in range(0, int(keep.sum()), 8):
             idx = np.where(keep)[0][b:b + 8]
-            p = predict_batch(torch.from_numpy(X[idx]), torch.from_numpy(RM[idx]))
+            p = predict_batch({cr: torch.from_numpy(X[cr][idx]) for cr in CROPS}, torch.from_numpy(RM[idx]))
             for k, i in enumerate(idx):
                 preds[chunk[i]] = p[:, k]                         # (groups, findings)
     except Exception:
@@ -412,6 +453,11 @@ if len(meta_df):
     print(f"\nseries that exist but failed to decode: {decode_fail:.1%}")
     if IS_RERUN and RAISE_IF_DECODE_FAIL is not None and decode_fail > RAISE_IF_DECODE_FAIL:
         raise RuntimeError(f"decode failure rate {decode_fail:.1%} > {RAISE_IF_DECODE_FAIL:.0%} (diagnostic stop)")
+    for cr in CROPS:
+        col = f"tissue_outside_{cr:g}"
+        if col in meta_df:
+            print(f"crop {cr:g} mm: median share of tissue outside the window per role:",
+                  meta_df.groupby("role")[col].median().round(3).to_dict())
 print("studies falling back to the prior:", len(studies) - len(preds))
 if side_log:
     sl = np.asarray(side_log)
@@ -426,7 +472,7 @@ if side_log:
 sub = make_submission(preds)
 validate_and_write(sub)
 print(f"total runtime {(time.time() - T_START) / 60:.1f} min | models " +
-      ", ".join(f"{g['name']}: {len(g['models'])}{' canonical ' + g['canon'] if g['canon'] else ''}" for g in GROUPS) +
+      ", ".join(f"{g['name']}: {len(g['models'])} @ {g['crop']:g} mm{' canonical ' + g['canon'] if g['canon'] else ''}" for g in GROUPS) +
       f" | TTA {[g['tta'] for g in GROUPS]}")
 sub.head()
 

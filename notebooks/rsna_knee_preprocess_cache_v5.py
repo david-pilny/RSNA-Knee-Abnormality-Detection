@@ -15,7 +15,17 @@
 # **Second setting (6 Oct): 320 px, 130 mm window, in two parts.** 320 px would exceed Kaggle's 20 GB output limit in one
 # run, so the studies are split: run this notebook twice, with `PART = "1/2"` and `PART = "2/2"` (two copies of the
 # notebook can run at the same time; CPU only). Save the outputs as two **new** datasets, `knee-mri-cache-320a` and
-# `knee-mri-cache-320b`. Training attaches both and joins them.
+# `knee-mri-cache-320b`. Training attaches both and joins them. (Result: +0.004 validation AUC, not pursued.)
+#
+# **Third setting (10 Oct, the current default): the joint region, 90 mm window at 256 px → 0.35 mm per pixel.**
+# A second model that sees only the joint line at close to native resolution: menisci, both tibiofemoral compartments,
+# the cruciate ligaments in the notch, the collaterals. It deliberately loses the patella, the shafts and the posterior
+# soft tissue; those findings (PF OA, Baker's, effusion, synovitis, contusion, fracture) stay with the 140 mm model, and
+# the submission blends the two per finding. The window is centred on the tissue box like before, which puts the joint
+# line near the centre because MRI technologists centre the field of view on it; section 5's pictures are the check:
+# **on every sagittal and coronal sample both menisci and both tibiofemoral compartments must be fully inside.**
+# If the joint sits too low or high in several samples, raise `CROP_MM` to 100 and rerun. One part fits in one dataset:
+# save the output as **`knee-mri-cache-joint`**.
 #
 # ```
 # DICOM folders (≈100k files, mixed sizes, orientations, compression)
@@ -51,9 +61,11 @@ ROLES = {                       # role name: (plane, fluid-sensitive wanted?)
     "cor_fs": ("Coronal", 1),   # MCL, meniscal bodies, medial/lateral OA
     "ax_fs":  ("Axial", 1),     # patellofemoral OA, synovitis, Baker's cyst, effusion
 }
-DEPTH, IMG = 24, int(os.environ.get("IMG", 320))
-CROP_MM = float(os.environ.get("CROP_MM", 130))   # in-plane window around the knee, millimetres (0 = whole field of view)
-PART = os.environ.get("PART", "1/2")   # "k/n": this notebook makes part k of n (every n-th study); n = 2 keeps each part
+# settings per cache: whole knee 256 px / 140 mm / "1/1" (knee-mri-cache, latest) | 320 px / 130 mm / "1/2" + "2/2"
+# (knee-mri-cache-320a/b) | joint region 256 px / 90 mm / "1/1" (knee-mri-cache-joint, the current default)
+DEPTH, IMG = 24, int(os.environ.get("IMG", 256))
+CROP_MM = float(os.environ.get("CROP_MM", 90))    # in-plane window around the knee, millimetres (0 = whole field of view)
+PART = os.environ.get("PART", "1/1")   # "k/n": this notebook makes part k of n (every n-th study); n = 2 keeps each part
                                       # under Kaggle's 20 GB output limit at 320 px. "1/1" = everything in one run
 SHARD_SIZE = 100
 LIMIT = None
@@ -480,7 +492,8 @@ print("output files:", len(list(OUT_DIR.rglob("*"))), "(Kaggle limit: 500)")
 # ## 9. Turn the output into a dataset
 #
 # 1. Run this notebook with **Save Version → Save & Run All** (CPU is enough).
-# 2. Open the finished version → **Output** → **New Dataset**, name it **`knee-mri-cache-v5`**.
+# 2. Open the finished version → **Output** → **New Dataset**, named after the setting (section 1): **`knee-mri-cache-joint`**
+#    for the 90 mm joint crop. Never add it as a version of an existing cache: a notebook can attach only one version.
 # 3. The dataset contains:
 #    - `cache/shard_*.npz`: the images,
 #    - `cache/index.csv`: one row per study and role (which series, fallback, errors, scanner, laterality, ...),

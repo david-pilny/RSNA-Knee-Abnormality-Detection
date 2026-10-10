@@ -57,8 +57,11 @@ def our_member():
             groups.append({"name": cfg.get("group_name") or str(cfg.get("labels_file", d.name)).rsplit(".", 1)[0], "cfg": cfg, "files": files, "dir": d})
     assert groups, "no model datasets (train_config.json + model_fold*.pt) attached"
     for g in groups:
-        assert g["cfg"]["labels"] == LABELS and g["cfg"].get("depth", cache_cfg["DEPTH"]) == cache_cfg["DEPTH"]
-        _our_log(f"group '{g['name']}': {len(g['files'])} models, {g['cfg']['backbone']}, gold AUC at training {g['cfg'].get('gold_macro_auc', float('nan')):.3f}")
+        assert g["cfg"]["labels"] == LABELS and g["cfg"].get("depth", cache_cfg["DEPTH"]) == cache_cfg["DEPTH"] \
+            and g["cfg"].get("img", cache_cfg["IMG"]) == cache_cfg["IMG"]
+        g["crop"] = float(g["cfg"].get("crop_mm") or cache_cfg.get("CROP_MM") or 0)    # each group predicts on its own crop
+        _our_log(f"group '{g['name']}': {len(g['files'])} models, {g['cfg']['backbone']}, crop {g['crop']:g} mm, gold AUC at training {g['cfg'].get('gold_macro_auc', float('nan')):.3f}")
+    crops = sorted({g["crop"] for g in groups})
     W = np.ones((len(groups), len(LABELS)))
     if len(groups) > 1:
         for gname, per in OUR_BLEND_WEIGHTS.items():
@@ -100,8 +103,33 @@ def our_member():
         sys.path.insert(0, str(preproc_dir))
     os.environ["PYTHONPATH"] = str(preproc_dir) + os.pathsep + os.environ.get("PYTHONPATH", "")
     import knee_preproc as kp
+    import inspect
+    assert "crop_mm" in inspect.signature(kp.resample).parameters, "attach a cropped cache (v5 or later)"
     import torch, torch.nn as nn, timm
     from joblib import Parallel, delayed
+
+    def process_study_crops(study_uid, study_rows, series_root, roles, depth, img, crops):
+        # kp.process_study, but the decoded series is resampled once per crop: ({crop: {role: array or None}}, metas)
+        torch.set_num_threads(1)
+        arrays, metas = {c: {} for c in crops}, []
+        for role, (plane, fluid) in roles.items():
+            m = {"StudyInstanceUID": study_uid, "role": role, "ok": False, "error": None}
+            try:
+                best, fallback = kp.select_series(study_rows, plane, fluid, Path(series_root) / study_uid)
+                if best is None:
+                    raise LookupError(f"no {plane} series")
+                vol, hdr, pos = kp.load_series(Path(series_root) / study_uid / best.SeriesInstanceUID, kp.GEOMETRY[plane]["slice_axis"])
+                vol, ps = kp.canonicalize(vol, hdr, plane)
+                vol01 = kp.normalize_u8(vol)
+                for c in crops:
+                    arrays[c][role], _ = kp.resample(vol01, ps, depth, img, crop_mm=c)
+                m["ok"] = True
+            except Exception as e:
+                for c in crops:
+                    arrays[c][role] = None
+                m["error"] = f"{type(e).__name__}: {str(e)[:160]}"
+            metas.append(m)
+        return arrays, metas
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     channels_last = device == "cuda"
@@ -191,12 +219,12 @@ def our_member():
         return 0.5 * out
 
     @torch.no_grad()
-    def predict_batch(x_u8, rmask):
+    def predict_batch(xs, rmask):                            # xs: {crop: uint8 tensor}; each group uses its own crop
         out, canon_views = [], {}
         for g in groups:
-            base = x_u8
+            x_u8 = base = xs[g["crop"]]
             if g["canon"]:
-                key = id(g["side"])
+                key = (id(g["side"]), g["crop"])
                 if key not in canon_views:
                     p_left = side_p_left(x_u8, rmask, g["side"])
                     side_log.extend(p_left.cpu().numpy().tolist())
@@ -220,9 +248,9 @@ def our_member():
 
     def run(study):
         try:
-            return kp.process_study(study, rows_of.get(study, test_series.iloc[:0]), series_root, roles_used, DEPTH, IMG)
+            return process_study_crops(study, rows_of.get(study, test_series.iloc[:0]), series_root, roles_used, DEPTH, IMG, crops)
         except Exception as e:
-            return {r: None for r in roles}, [{"StudyInstanceUID": study, "role": "all", "ok": False, "error": repr(e)[:200]}]
+            return {c: {r: None for r in roles} for c in crops}, [{"StudyInstanceUID": study, "role": "all", "ok": False, "error": repr(e)[:200]}]
 
     deadline = _our_t0 + OUR_TIME_LIMIT_H * 3600
     budget_end = globals().get("T0", _our_t0) + globals().get("TIME_BUDGET", 8 * 3600) - 20 * 60   # the public clock, 20 min spare
@@ -233,17 +261,19 @@ def our_member():
             break
         chunk = studies[c:c + OUR_CHUNK]
         res = Parallel(n_jobs=os.cpu_count() or 2)(delayed(run)(s) for s in chunk)
-        X = np.zeros((len(chunk), len(roles), DEPTH, IMG, IMG), np.uint8)
+        X = {cr: np.zeros((len(chunk), len(roles), DEPTH, IMG, IMG), np.uint8) for cr in crops}
         RM = np.zeros((len(chunk), len(roles)), np.float32)
         for i, (arrs, meta) in enumerate(res):
             for j, role in enumerate(roles):
-                if arrs.get(role) is not None:
-                    X[i, j] = arrs[role]; RM[i, j] = 1
+                if arrs[crops[0]].get(role) is not None:
+                    for cr in crops:
+                        X[cr][i, j] = arrs[cr][role]
+                    RM[i, j] = 1
         keep = np.where(RM.sum(1) > 0)[0]
         n_fail += len(chunk) - len(keep)
         for b in range(0, len(keep), 8):
             idx = keep[b:b + 8]
-            p = predict_batch(torch.from_numpy(X[idx]), torch.from_numpy(RM[idx]))
+            p = predict_batch({cr: torch.from_numpy(X[cr][idx]) for cr in crops}, torch.from_numpy(RM[idx]))
             for k, i in enumerate(idx):
                 preds[chunk[i]] = p[:, k]
         if (c // OUR_CHUNK) % 5 == 0:

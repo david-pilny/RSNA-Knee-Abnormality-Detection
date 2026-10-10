@@ -40,6 +40,11 @@
 # - **v7 session 1 (canonical side, fold 0):** the side job (alone, ~15 min), then `v7_b0` and `v7_cnxn` fold 0 in
 #   parallel. Compare with the 256 px fold-0 numbers (B0 0.8607, ConvNeXt 0.8568 val, mirror TTA), especially
 #   Lateral Meniscus and Lateral OA. The side job's own report (tag coverage, hold-out accuracy) is printed first.
+#   Result: no gain (B0 +0.001, ConvNeXt −0.007); the side classifier itself reached 0.988.
+# - **v8 session 1 (joint-region crop, fold 0, the current default):** inputs `knee-report-labels-v4` +
+#   **`knee-mri-cache-joint`** (and no other cache), GPU T4 ×2. `v8_joint_b0` and `v8_joint_cnxn` fold 0 in parallel,
+#   ~1.1 h wall. Read the per-finding fold-0 table: the joint model is meant for Medial/Lateral Meniscus, Medial/Lateral
+#   OA, ACL and MCL; it will be worse on PF OA, Baker's and effusion by design, and the submission blends per finding.
 
 # %% [code] {"jupyter":{"outputs_hidden":false}}
 import os, sys, json, time, math, shutil, subprocess, threading, queue
@@ -77,11 +82,17 @@ SIDE_JOB = {"name": "side", "side": True, "side_epochs": 3, "side_holdout": 0.15
 CANON = {"canonical_side": "R", "mirror_aug": False, "tta": False}
 V7_B0 = {**CANON}
 V7_CNXN = {**CNXN, **CANON}
-FOLDS = [0]                    # session 1: fold 0 only (compare with 256 px: B0 0.8607, ConvNeXt 0.8568 val)
+# Result (10 Oct): side classifier 0.988 hold-out accuracy; B0 0.8616 vs 0.8607, ConvNeXt 0.8497 vs 0.8568 → no gain.
+# v8 (10 Oct): the joint-region cache (knee-mri-cache-joint: 90 mm window at 256 px, 0.35 mm/px). Same model, same
+# settings as v5 (mirror augmentation + TTA); only the input differs. Attach ONLY the joint cache (training joins every
+# attached cache and would refuse two different crops). The groups' train_config.json records crop_mm = 90, which the
+# submission uses to preprocess each test study once per crop and blend the whole-knee and joint groups per finding.
+FOLDS = [0]                    # session 1: fold 0 only (compare with 256 px / 140 mm: B0 0.8607, ConvNeXt 0.8568 val;
+                               # the joint model must win on the menisci and the tibiofemoral OA, not on the macro)
                                # session 2: [1, 2, 3, 4] (fold 0 is reused from the attached session-1 output)
-JOBS = [SIDE_JOB]
+JOBS = []
 for k in FOLDS:
-    JOBS += [{"name": "v7_cnxn", "fold": k, **V7_CNXN}, {"name": "v7_b0", "fold": k, **V7_B0}]
+    JOBS += [{"name": "v8_joint_cnxn", "fold": k, **CNXN}, {"name": "v8_joint_b0", "fold": k}]
 if os.environ.get("JOBS"):                      # local tests override the job list
     JOBS = json.loads(os.environ["JOBS"])
 N_FOLDS = 5
