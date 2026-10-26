@@ -1,8 +1,13 @@
 # CLAUDE.md: RSNA Knee Abnormality Detection (Kaggle 2026)
 
-Hand-off notes for continuing this project in a new session. Last updated **10 Oct 2026**.
+Hand-off notes for continuing this project in a new session. Last updated **25 Oct 2026**.
 
-**Where we are:** David chose to build on the public 0.94 notebook (`docs/DECISION.md` records the decision and its outcome). The fork
+**Competition over** (final submission deadline 22 Oct). On 25 Oct we read the 1st-place write-ups (0.969 public / 0.960
+private); §9 compares them with our pipeline. Main finding: the host had allowed hosted LLM APIs months before the deadline
+(§2), and the winners' labels came from frontier AI agents that read the report **and the images** (gold AUC ~0.94 vs our
+0.879). The v8 outcome, the two finals we picked and our private score are not recorded here.
+
+**Where we were on 10 Oct:** David chose to build on the public 0.94 notebook (`docs/DECISION.md` records the decision and its outcome). The fork
 alone scores **0.943**; our own models (v5: 0.918 alone) add nothing to it (§6.5). Resolution is exhausted (320 px: +0.003 val).
 **10 Oct: canonical knee side (v7, §7) tested on fold 0 — no gain (B0 +0.001, ConvNeXt −0.007 val): stopped.** Every
 model-side lever (labels, resolution, side, backbone) has now been measured at ≤ +0.003. **Last experiment, chosen by
@@ -36,6 +41,7 @@ The public landscape moved: a public **0.949 single CoAtNet** thread exists (§6
   ≥ 0.958; bronze (top 10 % ≈ rank 566) probably needs ≈ 0.95+. Public LB = ~30 % of the test set (~390 studies): ±0.005 is noise.
   The LB is crowded at ~0.94 because the **public notebooks are forks of one inference notebook with published weights**
   (§6.6); since early Oct a public **0.949 single-CoAtNet** thread exists (§6.7).
+  **Final:** 1st place Team Kangaroo, 0.969 public / 0.960 private (§9).
 - **Efficiency track** (separate prizes $7k/$6k/$5k): `Efficiency = AUC/(Benchmark − maxAUC) + Runtime/32400`, minimised on
   the private set → ≈ `−2.16·AUC + runtime_h/9`: **one hour of runtime costs 0.05 AUC**. The submission must be one of the two
   selected finals and beat `sample_submission`. Our v5 pipeline (0.918, ~1 h?) scores ≈ −1.87 vs ≈ −1.38 for the 6 h public fork.
@@ -43,10 +49,15 @@ The public landscape moved: a public **0.949 single CoAtNet** thread exists (§6
 
 ## 2. Hard rules / constraints
 
-- **Never send report text to hosted LLM APIs** (ChatGPT, Claude, Gemini…): the data-security rule (4.b) plausibly forbids it.
-  The labeller runs an open-weights model inside Kaggle. This also applies to the assistant: **don't ask the user to paste
-  report text**, and don't read files that may contain it. Numbers-only files (labels, probabilities, predictions) are fine
-  and live in `data/` (git-ignored).
+- **Hosted LLM APIs were allowed; our rule against them was wrong.** We assumed the data-security rule (4.b) plausibly
+  forbade sending report text to ChatGPT, Claude, Gemini… and never checked; our labeller runs an open-weights model inside
+  Kaggle because of that assumption. The host's pinned thread "Use of Commercially Hosted LLMs" (discussion 733965, read
+  25 Oct) says sending competition data, report text included, to an external LLM or API for processing such as label
+  extraction is not prohibited private sharing (rules §2.6.b), provided the service is reasonably accessible and of minimal
+  cost; in a reply the host confirmed that using the OpenAI API to label the reports is fine. The 1st-place team labelled
+  with hosted frontier models (§9). **Still in force for the assistant until David decides otherwise:** don't ask him to
+  paste report text and don't read files that may contain it. Numbers-only files (labels, probabilities, predictions) are
+  fine and live in `data/` (git-ignored).
 - **Do not use GPU P100** on Kaggle (current PyTorch has no Pascal kernels). Use **GPU T4 ×2**.
 - **Do not use `nn.DataParallel`** on Kaggle's torch 2.10 + T4: 7.5 s/step instead of 0.4, kernel deaths, and
   `CUDA error: misaligned address` with channels_last. Use **one GPU** (to use the second one, run two folds in separate processes).
@@ -120,6 +131,7 @@ Local copies (numbers only, git-ignored `data/`): `labels_v3.csv`, `labels_v4.cs
 | `public/our_member_cell_code.py` | the same cell without the 18-line header, as pasted into the fork (`tail -n +19`) | – |
 | `archive/` | superseded notebooks: v3 labeller, 224 px preprocess, baseline training, dummy submission, speed diagnostic | kept for reference |
 | `docs/` | `rsna_knee_data_explained.py` (interactive data explainer), the two explainer PDFs (older state), `DECISION.md` (2 Oct decision + outcome), `next-steps-6-oct.md` (options ranked on 6 Oct) | – |
+| `docs/script/` → `docs/rsna_knee_script.pdf` | 85-page LaTeX beginner's script (25 Oct): data, MRI basics, ML fundamentals, every experiment, the 1st-place solution. Rebuild with `docs/script/build.sh` (Tectonic via Homebrew; chart data from `data/` by `make_figure_data.py` into `figdata/`, not `data/`, which `.gitignore` hides). MRI images from Wikimedia Commons (CC BY-SA, credited in Appendix C) | done |
 | `analysis/*.py` | offline analysis of labels and predictions against gold (run from the project root with `PYTHONPATH=analysis .venv/bin/python analysis/<script>.py`; needs `data/`) | – |
 | `tests/` | fake-data generators, local tests, `make_kaggle_ipynb.py` (§3) | – |
 | `kaggle_upload/` (git-ignored) | `.ipynb` built from the notebooks for File → Import Notebook | – |
@@ -238,7 +250,8 @@ Effusion 0.952 → 0.955, Synovitis 0.740 → 0.711, Baker's 0.976 → 0.980, Co
   list before committing.
 
 ### 6.7 What the public notebooks are (researched 2 Oct via public GitHub write-ups)
-- Kaggle's own pages are JS-rendered and not readable by WebFetch; no Kaggle API token on this Mac.
+- Kaggle's own pages are JS-rendered and not readable by WebFetch; no Kaggle API token on this Mac. On 25 Oct the
+  browser-use tool read them signed out, discussion threads and write-ups included (the Chrome extension was not connected).
 - The ~0.94 band = forks of one inference notebook with ~13 public datasets of trained weights. Reference:
   `mattiaangeli/bend-the-knee-to-speedy-raptors-the-original` (its current version scores 0.943 for us); public ceiling 0.941–0.943.
 - Core model: **CoAtNet-RMLP-2, 2.5D attention-MIL, 336–384 px, 44–64 slices over 5 plane×contrast slots** ("Raptor"
@@ -251,17 +264,21 @@ Effusion 0.952 → 0.955, Synovitis 0.740 → 0.711, Baker's 0.976 → 0.980, Co
 - Sources: GitHub `NTejas-1/RSNA-Knee-Abnormality-Detection`, `TranBaDat2607/RSNA-Knee-Abnormality-Detection`,
   `ShivenKhurana1/rsna-knee-abnormality`, `Daniel766hi/RSNA`; Hugging Face blog `bishnoiyash/rsna-competetion`.
 - The copy of the competition rules in one of these repos allows external data and models that are "reasonably accessible
-  to all"; some public label tables were made with hosted LLMs by their authors.
+  to all"; some public label tables were made with hosted LLMs by their authors (allowed, §2).
 - **Forum, 10 Oct (titles only; threads could not be opened signed-out):** "Reaching 0.949 with one CoAtNet: labels, native
   crops, and anatomical mirroring" (39 comments) and "Does using the 0.949 weights count as a violation?" → public 0.949
   weights exist, the 0.943 fork is probably no longer the best public base. "8 public LLM label sets vs gold-58: 11 of 12
   findings show no clear difference" (labels saturated). "Please clarify which external knee MRI datasets are allowed"
   (88 votes, active) and "are public weights trained on OAI knee MRI allowed?" → unresolved rules question about public
   weights. Pinned host threads: "Knee Abnormality Detection AI Challenge Overview" (**this is where the label thresholds
-  of §1 live**; not on the Overview/Data pages) and "Use of Commercially Hosted LLMs" (the host's position on rule 4.b).
-  David should read these three signed in.
+  of §1 live**; not on the Overview/Data pages; still unread) and "Use of Commercially Hosted LLMs" (read 25 Oct: hosted
+  LLMs allowed, §2). The same thread holds a host ruling on external data: datasets behind a plain registration or
+  click-through agreement (OAI, MRNet, fastMRI+, SKM-TEA) are not excluded just because their licence is non-commercial;
+  datasets that need institutional approval, IRB or lengthy credentialing may fail the "reasonably accessible" test.
 
 ## 7. Next steps
+
+*The competition ended on 22 Oct; this section is the plan as of 10 Oct, kept for reference.*
 
 **10 Oct: v7 = canonical knee side** (`rsna_knee_train_v5.py`, default `JOBS`; submission + member cell updated, tested on fake data).
 Idea: mirror augmentation (p = 0.5) + mirror TTA made the model side-blind, yet 4 of 12 targets are side-specific
@@ -401,3 +418,59 @@ Other open items:
   predictions on the 4,349 report-labelled studies for a second opinion.
 - Mirror augmentation is regularisation, not just side-blindness: removing it (canonical side, v7) cost ConvNeXt-Nano
   0.007 val AUC and gained B0 nothing. A one-fold, ~2 GPU h test with a written stop rule settled this cheaply.
+- **Read the host's pinned rules threads on day one and treat every self-imposed rule as a question to verify.** Our "no
+  hosted LLMs" rule was an unchecked reading of 4.b; the host had allowed it, and the winners built their labels on it (§9).
+  It was our most expensive constraint.
+- **When the targets are weak, improve the supervision, not the model.** Every model-side lever we measured gave
+  ≤ +0.003; the winners gained +0.013 public with the same model by swapping labels (0.922 → 0.935), then more with
+  location boxes. Judge labels on calibration too (log loss, confident errors), not only AUC.
+- Report text can help without any hosted LLM: as a training-only target (predict an open-weights embedding of the report
+  from the image features). This was possible under our own rule.
+
+## 9. Post-mortem: the 1st-place solution (read 25 Oct)
+
+Team Kangaroo (tascj + sakaku), **0.969 public / 0.960 private**. Two write-ups: tascj's "1st Place Solution" (competition
+Writeups page) and sakaku's "1st place solution — Better labels, anatomy-aware MRI models" (discussion 752474). Their
+58-gold numbers are slightly optimistic: the gold studies were used to develop the labelling instructions.
+
+- **Labels (most of the gap).** Frontier AI agents (GPT-6 Astra, GPT-6.1 Sol; Codex CLI in non-interactive mode), one
+  session per study, read the report **and the images**. The workspace held an overview sheet per fluid-sensitive series,
+  a slice viewer (crop, zoom, window) and a tool that maps a point to another series by DICOM geometry; median ~2.5 min and
+  ~15 images per study. Answer: evidence first (report quotes, image evidence citing series and slices), then a continuous
+  probability. **Gold macro AUC 0.936–0.943** (our v4: 0.879). Labels judged on log loss and confident errors as well as
+  AUC; temperature calibration `p' = σ(0.77 · logit p)` fitted on gold; synovitis wording removed from the reports so the
+  agent judged it from the images. "Trained guide": in one long session the agent labels gold studies one at a time, sees
+  the answers, rewrites a notes file, and finally writes a reading guide used for the other studies. Same CoAtNet at
+  224 px, earlier multimodal labels → agent labels: **0.922 → 0.935 public**. Final label sets blend several sources with
+  one weight per source for all findings (per-finding weights did not survive leave-one-out).
+- **Location supervision.** Anatomy boxes per finding (the region where the finding is assessed, e.g. the whole ACL, or
+  patella + trochlea for PF OA, not the lesion), drawn by agents for 751 studies (tascj, 3D boxes) and 3,823 studies
+  (sakaku, per slice), then a detector for every series. tascj runs the detector at test time and uses **box pooling**: each
+  finding pools backbone features only inside its own box (+ learned in-box attention). sakaku uses the boxes only in
+  training (attention guidance). Lesion boxes (1,800 studies, 111k per-slice boxes) feed a training-only auxiliary head.
+  Each box entry is positive / reliable negative / ignore: a missing box is never a negative. This is how they separate
+  medial from lateral, and why the canonical side helps them (the detector takes the side as input) but did nothing in our
+  architecture (v7).
+- **Report as a training-only target:** a head predicts the report's embedding (Qwen3-Embedding-8B, open weights) from
+  the image features, loss 1 − cosine. Possible under our own rule.
+- **Input.** tascj: one series = one sample, single-slice 2D ConvNeXt-T, ≤ 64 native slices, 140 mm at 512 px, then a
+  112 mm crop around the joint ROIs at 384 px; study = mean over series; 2.5D, 3D and study-level models gave nothing once
+  the boxes were used. sakaku: 5 roles (adds sagittal and coronal non-fat-sat), 32 slices → 30 three-slice windows at
+  inference, 384 px, MaxViT-V2-B and CoAtNet-2. Same 140 mm field of view and 0.5/99.5 percentile windowing as ours.
+- **Gains, tascj's 256 px step by step (gold):** plain per-slice ConvNeXt-T 0.932 (our v5 five-fold B0: 0.904) → + box
+  pooling 0.933 → + 112 mm joint crop 0.939 → + in-box attention 0.940 → + calibrated labels 0.941 → + lesion and report
+  heads 0.943. The architecture adds ~+0.011; the labels made the base model.
+- **Training.** Soft-label BCE, AdamW, EMA; bf16 in sakaku's runs, so not on T4s. Raising the backbone lr ~10× (8e-6 →
+  9e-5, layer-wise decay 0.9) gave +0.008 public while gold went *down*. Final models trained on all data, EMA
+  checkpoints averaged.
+- **Validation.** They stopped trusting the 58 gold early: CV against their best agent soft labels (probability-weighted
+  "SoftAUC"), with the fold and the reference labels chosen by correlation with 20–30 leaderboard scores.
+- **Ensemble.** 384 px models on different label sets plus a "6-channel" input variant (each plane × fat-sat kind
+  resampled onto the current series' slices); input and label diversity gained more than backbone diversity (as in §8).
+- **Efficiency track:** one ConvNeXt-T at 256 px + detector, TensorRT, a C++ DICOM reader, only the fluid-sensitive series
+  read (41 % less data): ~4 min for 1,200 studies, 0.964 public / 0.954 private. Kaggle's read speed varied from ~30 to
+  500+ MB/s, so they submitted when the platform was idle.
+- **Workflow:** heavily agent-driven: Codex developed the labelling protocol against gold; Claude Opus 5.5 proposed and
+  ran the experiments that used the boxes.
+- **What we had right:** 140 mm field of view and percentile windowing, threshold-aware soft labels with "not mentioned ≠
+  negative", a side classifier (their 99.3 %, our 98.8 %), a joint crop, input diversity over backbone diversity.
