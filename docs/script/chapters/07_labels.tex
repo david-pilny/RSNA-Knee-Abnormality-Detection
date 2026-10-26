@@ -1,0 +1,287 @@
+\chapter{Step 1: reports into labels}
+\label{ch:labels}
+\whereami{2}
+
+\begin{tldr}
+\begin{itemize}
+\item We used an open \textbf{large language model} (LLM), running inside Kaggle, to read all 4,407 reports.
+\item \textbf{v3} (Qwen2.5-7B) asked for one word per finding and used ``any grade counts'': agreement with the
+      doctors' gold labels \textbf{0.809} AUC.
+\item \textbf{v4} (Qwen2.5-32B) used the organisers' thresholds, five answer letters, and read the model's
+      \textbf{probabilities} instead of its text: \textbf{0.879}. Leaderboard of the image model: 0.889 $\rightarrow$ 0.905.
+\item Reports cannot label what they do not mention: \textbf{Synovitis} is silent in 84\,\% of them.
+\end{itemize}
+\end{tldr}
+
+\section{What a language model does}
+
+A language model reads text split into \term{tokens} (word pieces) and, at every position, outputs a probability
+for every possible next token. Generating text means picking a token, appending it and repeating.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \node[draw=grid, fill=white, rounded corners=1.5mm, text width=56mm, font=\scriptsize\ttfamily, align=left,
+        inner sep=2mm] (p) at (0,0) {[instructions: 12 findings, definitions, letters P M U A N]\\[1mm]
+        [report of Study K]\\[1mm] \{"ACL": "};
+  \node[draw=accent, fill=keyfill, rounded corners=2mm, minimum width=20mm, minimum height=12mm, font=\footnotesize,
+        align=center] (m) at (50,0) {\faRobot\\ LLM};
+  \draw[-{Stealth}, muted, line width=0.8pt] (p) -- (m);
+  \foreach \t/\v [count=\i from 0] in {P/0.95, M/0.02, U/0.02, A/0.01, N/0.00, {the}/0.00} {
+    \node[font=\scriptsize\ttfamily, anchor=east] at (72,{9-\i*3.6}) {\t};
+    \fill[grid] (73,{9-\i*3.6-1.1}) rectangle ++(40,2.2);
+    \fill[us] (73,{9-\i*3.6-1.1}) rectangle ++({40*\v},2.2);
+    \node[font=\scriptsize, anchor=west] at (114,{9-\i*3.6}) {\v};
+  }
+  \draw[-{Stealth}, muted, line width=0.8pt] (m) -- (66,0);
+  \node[font=\scriptsize, text=muted, align=center] at (93,-15) {probability of each possible next token\\ (the full vocabulary has \ca 150,000)};
+\end{tikzpicture}
+\caption{The prompt ends right where the answer for ACL should start. The model's next-token probabilities
+\emph{are} the answer: 95\,\% ``P'' (present, past the threshold).}
+\label{fig:nexttoken}
+\end{figure}
+
+\begin{wordcheck}
+\term{LLM}: large language model, e.g.\ ChatGPT, Claude, Qwen. \term{Open-weights model}: one whose weights you can
+download and run yourself (Qwen is made by Alibaba). \term{Prompt}: the text you give the model.
+\term{4-bit quantization}: storing each weight in 4 bits instead of 16 so a big model fits in less memory.
+\end{wordcheck}
+
+\section{Why an open model, inside Kaggle?}
+
+We believed the competition's data rules forbade sending report text to hosted services such as ChatGPT or
+Claude, so the reports never left Kaggle. A Kaggle notebook offers two T4 GPUs with 16\,GB each, for at most
+12 hours per session. A 32-billion-parameter model only fits in 4-bit form (19\,GB spread over both GPUs).
+
+\begin{watchout}
+That belief was \textbf{wrong}. The organisers had stated in a pinned forum post that hosted LLM APIs, including
+for labelling reports, were allowed. We never read that post. The winners used the strongest hosted models and,
+crucially, let them look at the images too (Chapter~\ref{ch:winlabels}). Lesson: \textbf{check the rules threads on
+day one, and treat every self-imposed rule as a question to verify.}
+\end{watchout}
+
+\section{Version 3: the first labeller}
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{l>{\raggedright\arraybackslash}X}
+\toprule
+Model & Qwen2.5-7B-Instruct (16-bit) \\
+Prompt & ``for each finding, answer \code{present}, \code{minimal}, \code{uncertain}, \code{absent} or \code{not\_mentioned}; any grade counts'' \\
+Reading the answer & parse the generated text; map to label values 1, 0.5 or 0 \\
+Runtime & 3.8 hours for 4,407 reports; 3.6\,\% of reports had an unparseable answer \\
+Agreement with gold & \textbf{macro AUC 0.809} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Two problems showed up when we compared it with the 58 gold studies:
+\begin{enumerate}
+\item \textbf{Wrong definitions.} ``Any grade counts'' turned every small effusion and every mild sprain into a
+      positive. The organisers' rule is the opposite (Figure~\ref{fig:thresholds}).
+\item \textbf{Silence became ``absent''.} The model almost never answered \code{not\_mentioned} (0--2 of 58 gold
+      reports per finding). But ``the report does not mention synovitis'' is not the same as ``no synovitis''.
+\end{enumerate}
+
+\section{Version 4: four changes}
+
+\subsection*{1. The organisers' thresholds, written into the prompt}
+
+For every finding the prompt lists what counts as \textbf{P} (present and past the threshold) and what counts as
+\textbf{M} (present but below it). Two examples:
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X}
+\toprule
+ & P (counts) & M (does not count) \\
+\midrule
+Effusion & moderate or large joint effusion & small, trace, minimal, mild or physiological fluid \\
+MCL & acute high-grade partial or complete tear (grade 2--3) & grade 1 sprain, edema around an intact ligament, old scarring \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection*{2. Five answers instead of three}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  let/.style={draw=#1, fill=#1!15, rounded corners=1.5mm, minimum width=24mm, minimum height=19mm, align=center,
+              font=\footnotesize, text width=22mm}]
+  \node[let=them] at (0,0) {\textbf{\Large P}\\ present, past the threshold};
+  \colorlet{mcol}{them!60}
+  \node[let=mcol] at (27,0) {\textbf{\Large M}\\ present, below the threshold};
+  \node[let=whyline] at (54,0) {\textbf{\Large U}\\ unclear: no size, or hedged};
+  \node[let=us] at (81,0) {\textbf{\Large A}\\ explicitly absent / normal};
+  \node[let=muted] at (108,0) {\textbf{\Large N}\\ not mentioned at all};
+  \foreach \x/\v in {0/1, 27/{\ca 0.2}, 54/{\ca 0.5}, 81/0, 108/{measured}} {
+    \node[font=\scriptsize, text=ink] at (\x,-14) {value: \textbf{\v}};
+  }
+\end{tikzpicture}
+\caption{The five answer letters and their label values. The values for M, U and N were measured on the gold
+studies per finding (how often a gold doctor said ``positive'' after that answer), pulled towards the defaults
+shown here so that 58 studies do not overrule common sense.}
+\label{fig:letters}
+\end{figure}
+
+\begin{example}
+``Not mentioned'' means different things for different findings. For \textbf{Fracture} a silent report almost
+always means no fracture (value \ca 0). For \textbf{Synovitis}, 15 of the 41 gold studies whose report was silent
+were positive, so N gets a value of about \textbf{0.33}: ``we don't know, but a third of these knees have it''.
+\end{example}
+
+\subsection*{3. Read probabilities instead of text}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  seg/.style={draw=grid, fill=white, font=\scriptsize\ttfamily, minimum height=7mm, inner sep=1.5mm},
+  ans/.style={draw=them, fill=whyfill, font=\scriptsize\ttfamily\bfseries, minimum height=7mm, inner sep=1.5mm}]
+  \node[seg, anchor=west] (a) at (0,0) {\{"ACL": "};
+  \node[ans, anchor=west] (b) at (a.east) {P};
+  \node[seg, anchor=west] (c) at (b.east) {", "MCL": "};
+  \node[ans, anchor=west] (d) at (c.east) {A};
+  \node[seg, anchor=west] (e) at (d.east) {", "Medial Meniscus": "};
+  \node[ans, anchor=west] (f) at (e.east) {A};
+  \node[seg, anchor=west, draw=none] (g) at (f.east) {\ldots\ 12 findings + language};
+  \node[seg, anchor=west, minimum height=4mm] (k1) at (0,-9) {};
+  \node[font=\scriptsize, anchor=west] at (k1.east) {written by us};
+  \node[ans, anchor=west, minimum height=4mm] (k2) at (30,-9) {};
+  \node[font=\scriptsize, anchor=west] at (k2.east) {chosen by the model (we keep the probabilities of P, M, U, A, N)};
+\end{tikzpicture}
+\caption{We wrote the JSON answer ourselves and let the model fill in only the letters. At each gap we kept the
+probabilities of all five letters (Figure~\ref{fig:nexttoken}). 13 tiny model calls per report instead of
+\ca 110 generated tokens, and no parsing errors.}
+\label{fig:prefill}
+\end{figure}
+
+The soft label is the probability-weighted value:
+\[
+\text{label} = \sum_{\text{letter}} p(\text{letter}) \cdot \text{value}(\text{letter})
+\]
+
+\begin{example}
+Study K, ACL: $p$(P) = 0.95, $p$(M) = 0.02, $p$(U) = 0.02, $p$(A) = 0.01, $p$(N) = 0.00. \\
+Label $= 0.95\cdot1 + 0.02\cdot0.2 + 0.02\cdot0.5 + 0.01\cdot0 = \mathbf{0.964}$. \\
+Study K, Synovitis: $p$(N) = 0.97 $\Rightarrow$ label $\approx 0.97 \cdot 0.33 \approx \mathbf{0.32}$: ``unknown, prior
+about one in three''.
+\end{example}
+
+\subsection*{4. A bigger model, made affordable}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \fill[us!60] (0,0) rectangle (80.6,7);
+  \node[font=\scriptsize, text=white] at (40,3.5) {shared instructions: 1,409 tokens (computed once)};
+  \fill[them!70] (80.6,0) rectangle (100,7);
+  \node[font=\scriptsize, text=white] at (90.3,3.5) {report};
+  \draw[decorate, decoration={brace, amplitude=1.5mm}] (0,8) -- (100,8) node[midway, above=2mm, font=\scriptsize]
+      {median prompt: 1,747 tokens};
+  \node[font=\footnotesize, align=left, anchor=west] at (104,3.5) {only this part\\ is new per report};
+\end{tikzpicture}
+\caption{81\,\% of every prompt is the same instructions. Their internal state (the \term{KV cache}) was computed
+once and reused for every report, which made the 32B model affordable on two T4s.}
+\end{figure}
+
+\paragraph{Safety rails.} Self-tests at start-up (the shortcut gives the same numbers as the plain model); the
+58 gold reports first, and the 4,407-report run only if their macro AUC reached 0.84 (a \term{gate}); a time
+limit of 10.5\,h with resume, because Kaggle kills sessions at 12\,h and a killed run saves nothing.
+
+\section{Results}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=11cm, height=7.4cm, xmin=0.64, xmax=1.0,
+    symbolic y coords={Fracture,Contusion,Baker's,Synovitis,Effusion,PF OA,Lat.~OA,Med.~OA,Lat.~meniscus,Med.~meniscus,MCL,ACL},
+    ytick=data, y tick label style={font=\footnotesize}, xmajorgrids, xlabel={agreement with the 58 gold labels (AUC)},
+    xlabel style={font=\footnotesize}, enlarge y limits=0.05, legend style={at={(0.98,0.02)}, anchor=south east, fill=white}]
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.832,ACL) (0.99,ACL)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.836,MCL) (0.989,MCL)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.886,Med.~meniscus) (0.929,Med.~meniscus)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.774,Lat.~meniscus) (0.872,Lat.~meniscus)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.92,Med.~OA) (0.933,Med.~OA)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.845,Lat.~OA) (0.839,Lat.~OA)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.758,PF OA) (0.837,PF OA)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.752,Effusion) (0.869,Effusion)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.676,Synovitis) (0.774,Synovitis)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.904,Baker's) (0.903,Baker's)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.713,Contusion) (0.729,Contusion)};
+  \addplot[grid, line width=1.8pt, forget plot] coordinates {(0.806,Fracture) (0.886,Fracture)};
+  \addplot[only marks, mark=*, mark size=2.4pt, color=muted] coordinates {
+    (0.832,ACL) (0.836,MCL) (0.886,Med.~meniscus) (0.774,Lat.~meniscus) (0.920,Med.~OA) (0.845,Lat.~OA)
+    (0.758,PF OA) (0.752,Effusion) (0.676,Synovitis) (0.904,Baker's) (0.713,Contusion) (0.806,Fracture)};
+  \addplot[only marks, mark=*, mark size=2.6pt, color=us] coordinates {
+    (0.990,ACL) (0.989,MCL) (0.929,Med.~meniscus) (0.872,Lat.~meniscus) (0.933,Med.~OA) (0.839,Lat.~OA)
+    (0.837,PF OA) (0.869,Effusion) (0.774,Synovitis) (0.903,Baker's) (0.729,Contusion) (0.886,Fracture)};
+  \legend{{v3 labels (macro 0.809)}, {v4 labels (macro 0.879)}}
+\end{axis}
+\end{tikzpicture}
+\caption{How well each label set agrees with the doctors, per finding. The threshold-aware v4 fixed ACL and MCL
+(almost perfect: reports state ligament tears clearly), and helped effusion, fracture and PF OA. Synovitis and
+contusion stayed weak.}
+\label{fig:v3v4}
+\end{figure}
+
+\begin{innumbers}
+Same image model, only the labels changed: \textbf{0.889 $\rightarrow$ 0.905} on the public leaderboard. On gold, the
+model's ACL went 0.887 $\rightarrow$ 0.934, MCL 0.810 $\rightarrow$ 0.887, PF OA 0.799 $\rightarrow$ 0.900. The
+biggest single gain of our whole project.
+\end{innumbers}
+
+\section{What the labeller actually answered}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=8.2cm, height=9cm, enlargelimits=false, colormap={bl}{color=(white) color=(us)},
+    xtick={0,...,4}, xticklabels={P,M,U,A,N}, x tick label style={font=\footnotesize\bfseries},
+    ytick={0,...,11}, yticklabels={ACL,MCL,Med.\ meniscus,Lat.\ meniscus,Med.\ OA,Lat.\ OA,PF OA,Effusion,Synovitis,Baker's,Contusion,Fracture},
+    y tick label style={font=\footnotesize}, y dir=reverse, axis line style={draw=none}, tick style={draw=none},
+    nodes near coords={\pgfmathprintnumber[fixed, precision=0]{\pgfplotspointmeta}}, nodes near coords style={font=\scriptsize, anchor=center},
+    point meta min=0, point meta max=100, xticklabel pos=top]
+  \addplot[matrix plot*, mesh/cols=5, point meta=explicit] table[x=x, y=y, meta=share] {figdata/letters.dat};
+\end{axis}
+\end{tikzpicture}
+\caption{The labeller's most likely letter for each finding, in \% of the 4,349 report-only studies. Synovitis is
+``not mentioned'' (N) in \synSilent\,\% of reports. MCL is P in only 1.4\,\% (the threshold wording was too strict:
+6 of the 9 gold-positive MCL studies were answered M).}
+\label{fig:letterheat}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[ybar interval, width=10cm, height=4.6cm, xmin=0, xmax=1, ymin=0, xlabel={soft label for Effusion},
+    ylabel={studies}, xlabel style={font=\footnotesize}, ylabel style={font=\footnotesize}, ymajorgrids,
+    xtick={0,0.2,...,1}, xticklabel style={/pgf/number format/fixed}]
+  \addplot[fill=us!70, draw=white] table[x=left, y=n] {figdata/effusion_hist.dat};
+\end{axis}
+\end{tikzpicture}
+\caption{What the v4 labels look like for Effusion. Three peaks: clearly no (0, 38\,\%), clearly yes (1, 22\,\%), and
+a large group at \textbf{0.44}: reports that mention an effusion without saying how much (answer U). The value of
+U for Effusion, measured on the gold studies, is 0.44: a bit less than half of such knees had a moderate or large
+effusion, so 0.44 is the honest label. Soft-label training
+(Figure~\ref{fig:bce}) uses these in-between values directly.}
+\end{figure}
+
+\section{What reports cannot do}
+
+\begin{keyidea}
+A report-based label can only be as good as the report. Where reports are explicit (ACL, MCL) our labels reached
+0.99. Where they are silent or vague (Synovitis, Contusion, Lateral OA) no prompt could fix it: \textbf{the
+information is in the images, not in the text.} This is exactly where the winners' approach (reading the images
+as well) made the difference.
+\end{keyidea}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can explain the five letters and how a soft label is computed from them.
+\done I know why reading probabilities beats parsing generated text.
+\done I know which findings reports label well and which they cannot.
+\quiz Q7.1: Why is ``not mentioned'' not the same as ``absent''? Give a finding where the difference is large.
+\quiz Q7.2: v4 labels improved ACL from 0.83 to 0.99 agreement. Why did the image model's gold ACL only go from
+      0.89 to 0.93?
+\quiz Q7.3: What does the ``gate'' protect against?
+\end{itemize}
+\end{checkpoint}

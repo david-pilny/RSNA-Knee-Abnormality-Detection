@@ -1,0 +1,207 @@
+\chapter{The competition in one chapter}
+\label{ch:competition}
+
+\begin{tldr}
+\begin{itemize}
+\item \textbf{Input:} one knee MRI exam (several 3D image stacks). \textbf{Output:} 12 probabilities, one per finding.
+\item \textbf{Score:} ROC-AUC per finding, averaged over the 12 (rare findings count as much as common ones).
+\item \textbf{Code competition:} you submit a notebook; Kaggle runs it offline on \ca 1,300 hidden exams, at most 9 hours.
+\item \textbf{Two leaderboards:} public (30\,\% of the test exams, visible during the competition) and private
+      (the other 70\,\%, revealed at the end, the one that counts).
+\end{itemize}
+\end{tldr}
+
+\section{The task in one picture}
+
+The organiser is the RSNA (Radiological Society of North America); the competition ran on Kaggle in
+autumn 2026 with \$77{,}000 in prizes. The job: build a program that looks at a knee MRI exam and says, for
+12 possible problems, how likely each one is.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  % a stack of slices for three series
+  \foreach \s/\lab/\yy in {0/sagittal/12, 1/coronal/0, 2/axial/-12} {
+    \foreach \k in {0,...,5} {
+      \fill[dark!85, draw=white, line width=0.3pt] ({\k*1.4},{\yy+\k*1.1}) rectangle ++(9,7);
+    }
+    \node[font=\scriptsize\sffamily, anchor=east, text=muted] at (-1.5,\yy+5) {\lab};
+  }
+  \node[font=\footnotesize, align=center] at (9,-20) {one \textbf{exam} (``study'')\\ = several image stacks};
+  % the model
+  \node[draw=accent, fill=keyfill, rounded corners=2mm, minimum width=26mm, minimum height=20mm, align=center,
+        font=\small] (m) at (48,4) {\faBrain\\[1mm] your model};
+  \draw[-{Stealth[length=2.5mm]}, line width=1pt, muted] (20,4) -- (m.west);
+  % twelve outputs
+  \foreach \t/\p [count=\i from 0] in {ACL/0.93, MCL/0.08, Medial meniscus/0.21, Lateral meniscus/0.12,
+      Medial OA/0.05, Lateral OA/0.03, PF OA/0.10, Effusion/0.81, Synovitis/0.30, Baker's/0.06,
+      Contusion/0.88, Fracture/0.15} {
+    \node[font=\scriptsize\sffamily, anchor=east] at (96,{24-\i*3.9}) {\t};
+    \fill[grid] (97,{24-\i*3.9-1.2}) rectangle ++(30,2.4);
+    \fill[us] (97,{24-\i*3.9-1.2}) rectangle ++({30*\p},2.4);
+    \node[font=\scriptsize, anchor=west] at (128,{24-\i*3.9}) {\p};
+  }
+  \draw[-{Stealth[length=2.5mm]}, line width=1pt, muted] (m.east) -- (70,4);
+  \node[font=\footnotesize, align=center] at (112,-26) {12 probabilities};
+\end{tikzpicture}
+\caption{The task. The example output is what a good model might say for \textbf{Study K}, an imaginary
+footballer who twisted their knee: a torn ACL (0.93), fluid in the joint (0.81) and bruised bone (0.88).}
+\label{fig:task}
+\end{figure}
+
+\begin{wordcheck}
+\term{Study} (or exam): everything scanned in one visit, for one knee. \term{Series}: one 3D image stack inside
+the study, taken in one direction with one setting (Chapter~\ref{ch:mri}). \term{Finding}: one of the 12 things
+to detect.
+\end{wordcheck}
+
+\section{The twelve findings}
+
+Chapter~\ref{ch:knee} explains each one with a drawing. For now, just the list:
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{>{\bfseries}l >{\raggedright\arraybackslash}X >{\bfseries}l >{\raggedright\arraybackslash}X}
+\toprule
+\multicolumn{2}{l}{\textsf{Ligaments \& menisci (``soft parts that tear'')}} & \multicolumn{2}{l}{\textsf{Joint wear, fluid \& bone}} \\
+\midrule
+ACL & anterior cruciate ligament torn & Medial OA & cartilage worn away, inner side \\
+MCL & medial collateral ligament torn & Lateral OA & cartilage worn away, outer side \\
+Medial meniscus & inner shock absorber torn & PF OA & cartilage worn behind the kneecap \\
+Lateral meniscus & outer shock absorber torn & Effusion & too much fluid in the joint \\
+ & & Synovitis & inflamed joint lining \\
+ & & Baker's & fluid cyst behind the knee \\
+ & & Contusion & bruised bone \\
+ & & Fracture & broken bone \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+A study can have none, one or many of them. Study~K has three. This is called a \term{multi-label}
+problem: 12 independent yes/no questions about the same images.
+
+\section{What ``code competition'' means}
+
+In many Kaggle competitions you download the test data and upload a file of answers. Here you never see the
+test images. You submit a \textbf{notebook} (a program), and Kaggle runs it on its own machine.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.88mm,y=1mm,
+  box/.style={draw=grid, fill=white, rounded corners=1.5mm, align=center, font=\footnotesize, minimum height=14mm, inner sep=2mm},
+  ar/.style={-{Stealth[length=2mm]}, line width=0.8pt, muted}]
+  \node[box, text width=30mm] (you) at (0,0) {\faUser\\ you write and train\\ (with internet)};
+  \node[box, text width=30mm] (nb) at (42,0) {\faFile\\ submission notebook\\ + attached model files};
+  \node[box, text width=40mm, draw=accent, line width=0.8pt] (kg) at (92,0)
+     {\faServer\\ Kaggle runs it on \ca 1,300 hidden exams\\ \textbf{no internet, at most 9 h}};
+  \node[box, text width=24mm] (lb) at (135,0) {\faTrophy\\ score appears on the leaderboard};
+  \draw[ar] (you) -- (nb); \draw[ar] (nb) -- (kg); \draw[ar] (kg) -- (lb);
+  \node[font=\scriptsize, text=muted] at (92,-12) {scoring takes hours: ours took about 6\,h per submission};
+\end{tikzpicture}
+\caption{A code competition. Everything the notebook needs (model weights, extra Python packages) must be
+attached in advance as Kaggle \emph{datasets}, because the scoring run is offline.}
+\end{figure}
+
+\begin{watchout}
+A notebook that crashes on the hidden data gives no score, and you only find out hours later. That is why
+every serious submission first writes a \textbf{safety-net} answer file (a constant guess) and then improves
+on it study by study (Chapter~\ref{ch:submission}).
+\end{watchout}
+
+\section{The score: macro ROC-AUC}
+
+For each finding Kaggle computes the \term{ROC-AUC}, then averages the 12 numbers. You will meet AUC properly
+in Chapter~\ref{ch:auc}; for now one sentence is enough:
+
+\begin{keyidea}
+AUC = the chance that the model gives a randomly chosen \emph{sick} knee a higher score than a randomly chosen
+\emph{healthy} knee. 0.5 is coin-flipping, 1.0 is perfect. Only the \emph{order} of the scores matters.
+\end{keyidea}
+
+Because the 12 AUCs are averaged with equal weight (a \term{macro} average), a rare finding like MCL tears
+counts exactly as much as a common one like effusion.
+
+\section{Two leaderboards}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \foreach \i in {0,...,99} {
+    \pgfmathsetmacro{\c}{mod(\i,20)}
+    \pgfmathsetmacro{\r}{int(\i/20)}
+    \ifnum\i<30
+      \fill[us] ({\c*4.2},{-\r*4.2}) rectangle ++(3.5,3.5);
+    \else
+      \fill[them!80] ({\c*4.2},{-\r*4.2}) rectangle ++(3.5,3.5);
+    \fi
+  }
+  \node[anchor=west, font=\footnotesize, align=left] at (88,1.5)
+    {\textcolor{us}{\rule{3mm}{3mm}}\ \textbf{public}: \ca 30\,\% (\ca 390 exams)\\ \hspace*{4.5mm}visible during the competition};
+  \node[anchor=west, font=\footnotesize, align=left] at (88,-10)
+    {\textcolor{them!80}{\rule{3mm}{3mm}}\ \textbf{private}: \ca 70\,\% (\ca 910 exams)\\ \hspace*{4.5mm}revealed at the end, decides the ranking};
+\end{tikzpicture}
+\caption{The hidden test set is split once, at random. Each square is 1\,\% of the \ca 1,300 test exams.}
+\end{figure}
+
+\begin{why}\textbf{Why two leaderboards?}
+If the score you see were the final score, you could submit many slightly different versions and keep the
+luckiest one. This is called \term{overfitting the public leaderboard}. The private part stops it: a choice that
+was only lucky on 390 exams does not stay lucky on the other 910.
+\end{why}
+
+\begin{innumbers}
+With \ca 390 public exams the public score wobbles by about $\pm0.005$ from luck alone. Differences smaller than
+that are noise. At the end you \textbf{select two submissions}; the better of the two on the private
+leaderboard is your final result.
+\end{innumbers}
+
+\section{The efficiency track}
+
+A second, smaller prize (\$7k / \$6k / \$5k) rewarded fast \emph{and} good submissions:
+\[
+\text{Efficiency} = \frac{\text{AUC}}{\text{Benchmark} - \text{maxAUC}} + \frac{\text{runtime in seconds}}{32{,}400}
+\qquad\text{(lower is better)}
+\]
+The benchmark is below the best AUC, so the first term is negative: a higher AUC makes it more negative.
+In practice this works out to roughly $-2.16\cdot\text{AUC} + \text{hours}/9$, so \textbf{one extra hour of
+runtime costs about as much as 0.05 AUC}. A 4-minute notebook at 0.954 (the winners' single model) beats a
+6-hour notebook at 0.96 easily.
+
+\section{The calendar}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=5.2mm,y=1mm]
+  % day 0 = 28 Sep, day 27 = 25 Oct
+  \draw[line width=1pt, muted] (0,0) -- (27.3,0);
+  \foreach \d/\l in {0/28 Sep, 4/2 Oct, 8/6 Oct, 12/10 Oct, 17/15 Oct, 24/22 Oct, 27/25 Oct} {
+    \draw[muted] (\d,-1) -- (\d,1);
+    \node[font=\scriptsize, text=muted, below] at (\d,-1) {\l};
+  }
+  % our milestones (above)
+  \foreach \d/\h/\t in {3/7/{v3 labels: 0.882--0.889}, 4.6/14/{v4 labels: 0.905}, 6.5/21/{public notebook: 0.943},
+                        7.4/28/{knee crop: 0.918}, 8.4/35/{320\,px: no gain}, 12/42/{knee side: no gain}} {
+    \draw[us, line width=0.6pt] (\d,0) -- (\d,\h);
+    \fill[us] (\d,0) circle (0.9mm);
+    \node[font=\scriptsize, anchor=south west, inner sep=1pt, fill=white] at (\d,\h) {\t};
+  }
+  % competition deadlines (below)
+  \foreach \d/\t in {17/{entry deadline}, 24/{final submission}, 27/{winners' write-ups}} {
+    \draw[them, line width=0.6pt] (\d,0) -- (\d,-11);
+    \fill[them] (\d,0) circle (0.9mm);
+    \node[font=\scriptsize, anchor=north, text width=19mm, align=center] at (\d,-11) {\t};
+  }
+\end{tikzpicture}
+\caption{Our project in time (blue, public leaderboard scores) and the competition deadlines (orange). Our
+active phase was the first two weeks of October.}
+\end{figure}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can say what goes in (one exam) and what comes out (12 probabilities).
+\done I know why the public leaderboard is not the final score.
+\quiz Q1.1: Why does a crashing notebook hurt more in a code competition than in a normal one?
+\quiz Q1.2: The public score of your new version is 0.003 higher. Is it better?
+\quiz Q1.3: In the efficiency track, is it worth adding a model that adds 0.01 AUC but one hour of runtime?
+\end{itemize}
+\end{checkpoint}

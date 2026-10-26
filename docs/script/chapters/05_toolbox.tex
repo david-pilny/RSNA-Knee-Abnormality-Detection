@@ -1,0 +1,402 @@
+\chapter{The machine-learning toolbox}
+\label{ch:toolbox}
+
+\begin{tldr}
+\begin{itemize}
+\item A model is a function with millions of adjustable numbers (\textbf{weights}). Training nudges them until the
+      outputs match the labels.
+\item Image models are \textbf{CNNs}: a pretrained \textbf{backbone} turns an image into a feature vector, a small
+      \textbf{head} turns features into the 12 outputs.
+\item Knee MRI is fed slice by slice (\textbf{2D}) or three neighbouring slices at a time (\textbf{2.5D}); the
+      slice results are \textbf{pooled} into one answer per study.
+\item Honest testing needs data the model never trained on: \textbf{cross-validation}. Averaging several models
+      (\textbf{ensembling}) almost always helps a little.
+\end{itemize}
+\end{tldr}
+
+\section{A model is a function with knobs}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.86mm,y=1mm]
+  \node[draw=grid, fill=white, rounded corners=1.5mm, minimum width=24mm, minimum height=16mm, align=center,
+        font=\footnotesize] (x) at (0,0) {\faImage\\ images\\ of one study};
+  \node[draw=accent, fill=keyfill, rounded corners=2mm, minimum width=44mm, minimum height=22mm] (f) at (45,0) {};
+  \node[font=\small\bfseries] at (45,6) {$f_{\theta}$};
+  \foreach \i in {0,...,6} {
+    \draw[accent, line width=0.6pt] ({29+\i*5.3},-5) circle (1.6);
+    \draw[accent, line width=0.8pt] ({29+\i*5.3},-5) -- ++({90-\i*37}:1.6);
+  }
+  \node[font=\scriptsize, text=muted] at (45,-10) {millions of knobs $\theta$ (weights)};
+  \node[draw=grid, fill=white, rounded corners=1.5mm, minimum width=24mm, minimum height=16mm, align=center,
+        font=\footnotesize] (y) at (90,0) {12 numbers\\ (one per finding)};
+  \draw[-{Stealth[length=2mm]}, line width=0.8pt, muted] (x) -- (f);
+  \draw[-{Stealth[length=2mm]}, line width=0.8pt, muted] (f) -- (y);
+  \node[draw=them, fill=whyfill, rounded corners=1.5mm, font=\footnotesize, align=center] (l) at (90,-22) {labels\\ (what we want)};
+  \draw[{Stealth[length=2mm]}-{Stealth[length=2mm]}, them, line width=0.8pt, dashed] (y) -- (l)
+     node[midway, right, font=\scriptsize] {compare};
+  \draw[-{Stealth[length=2mm]}, them, line width=0.8pt] (l.west) -- (60,-22) -- (52,-13)
+     node[pos=0.3, below, font=\scriptsize, text=them!85!black] {turn the knobs a little};
+\end{tikzpicture}
+\caption{Training in one picture: compare the outputs with the labels, then turn every knob a little in the
+direction that reduces the difference. Repeat many thousands of times.}
+\end{figure}
+
+\begin{wordcheck}
+\term{Weights} (parameters): the adjustable numbers inside the model. EfficientNet-B0, our main model, has about
+5 million; the winners' models have 30--120 million. \term{Training}: adjusting them. \term{Inference}: using the
+trained model on new data.
+\end{wordcheck}
+
+\section{How a CNN sees: filters}
+
+A \term{convolutional neural network} (CNN) looks at an image through many small \term{filters}. A filter is a
+3\,$\times$\,3 grid of weights that slides over the image; at each position it multiplies and adds, producing one
+number. The result is a new image, a \term{feature map}, which is bright where the filter's pattern occurs.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=4.2mm,y=4.2mm]
+  % input image 7x7
+  \foreach \i in {0,...,6} \foreach \j in {0,...,6} {
+    \pgfmathsetmacro{\v}{(\i<3) ? 15 : 75}
+    \fill[black!\v] (\i,\j) rectangle ++(1,1);
+  }
+  \draw[grid] (0,0) grid (7,7);
+  \draw[them, line width=1.4pt] (2,3) rectangle (5,6);
+  \node[font=\footnotesize, align=center] at (3.5,-1.4) {image (dark | bright edge)};
+  % filter
+  \begin{scope}[xshift=10.5cm/4.2]
+  \end{scope}
+  \foreach \i/\w in {0/-1,1/0,2/1} \foreach \j in {0,1,2} {
+    \fill[white] (\i+9.5,\j+3) rectangle ++(1,1);
+    \node[font=\scriptsize] at (\i+10,\j+3.5) {\w};
+  }
+  \draw[them, line width=1.4pt] (9.5,3) rectangle (12.5,6);
+  \draw[grid] (9.5,3) grid (12.5,6);
+  \node[font=\footnotesize, align=center] at (11,1.6) {filter\\ ``vertical edge''};
+  \node[font=\Large] at (8.25,4.5) {$\ast$};
+  \node[font=\Large] at (13.75,4.5) {$=$};
+  % feature map 5x5
+  \foreach \i in {0,...,4} \foreach \j in {0,...,4} {
+    \pgfmathsetmacro{\v}{(\i==1 || \i==2) ? 85 : 5}
+    \fill[us!\v] (\i+15,\j+1) rectangle ++(1,1);
+  }
+  \draw[grid] (15,1) grid (20,6);
+  \node[font=\footnotesize, align=center] at (17.5,-1.4) {feature map\\ (bright = edge found)};
+\end{tikzpicture}
+\caption{One filter finds vertical edges. A CNN learns hundreds of filters per layer and stacks dozens of layers:
+early layers find edges, middle layers textures, deep layers whole structures (``a meniscus'', ``fluid'').}
+\end{figure}
+
+\section{Backbone and head}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.84mm,y=1mm]
+  \fill[dark!85] (0,-12) rectangle (24,12);
+  \fill[white!65!dark] (12,0) circle (6);
+  \node[font=\footnotesize] at (12,-16) {one input image};
+  % backbone: shrinking blocks
+  \foreach \i/\h in {0/22,1/18,2/14,3/10,4/7} {
+    \fill[us!\the\numexpr 25+\i*15\relax, rounded corners=0.6mm] ({32+\i*9},{-\h/2}) rectangle ++(6,\h);
+  }
+  \draw[decorate, decoration={brace, amplitude=2mm}, line width=0.6pt] (32,14) -- (74,14)
+     node[midway, above=2.5mm, font=\footnotesize] {\textbf{backbone} (pretrained CNN)};
+  \node[font=\scriptsize, text=muted, align=center] at (53,-16) {edges $\rightarrow$ textures $\rightarrow$ structures};
+  % feature vector
+  \foreach \k in {0,...,9} \fill[us!80] (80,{-9+\k*1.9}) rectangle ++(3,1.5);
+  \node[font=\scriptsize, align=center] at (81.5,-16) {feature\\ vector};
+  % head
+  \node[draw=them, fill=whyfill, rounded corners=1.5mm, minimum width=14mm, minimum height=12mm, font=\footnotesize,
+        align=center] (h) at (99,0) {head};
+  \draw[-{Stealth}, muted] (84,0) -- (h);
+  \foreach \k in {0,...,11} \fill[them!80] (114,{-11+\k*1.9}) rectangle ++(3,1.5);
+  \draw[-{Stealth}, muted] (h) -- (113,0);
+  \node[font=\scriptsize, align=center] at (115.5,-16) {12 outputs};
+  \draw[-{Stealth}, muted] (25,0) -- (31,0);
+\end{tikzpicture}
+\caption{Every image model in this script has this shape. The backbone is big and pretrained; the head is small
+and new. ``Feature vector'' = a list of numbers that summarises what the backbone saw (1,280 numbers for
+EfficientNet-B0).}
+\label{fig:backbone}
+\end{figure}
+
+\subsection*{Pretrained backbones}
+
+Training a backbone from scratch needs millions of images. Instead everyone starts from a backbone trained on
+\term{ImageNet} (1.2 million photos of everyday things in 1,000 classes). Its early filters (edges, textures)
+are useful for any image, including MRI. We then \term{fine-tune}: keep training all weights on our task with a
+small learning rate. This is called \term{transfer learning}.
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{lrl>{\raggedright\arraybackslash}X}
+\toprule
+Backbone & Weights & Used by & Speed on a T4 GPU (ours, 256\,px) \\
+\midrule
+EfficientNet-B0 & 5\,M & us & 0.5\,s per batch of 8 studies \\
+ConvNeXt-Nano & 15\,M & us & about 1.4$\times$ slower \\
+ConvNeXt-T(iny) & 28\,M & winners & 2.5$\times$ slower, needed tricks to fit \\
+MaxViT-V2-B, CoAtNet-2 & 100\,M+ & winners, public & far too slow for us on T4s \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{2D, 2.5D or 3D?}
+
+A knee series is a 3D stack, but the best pretrained backbones are 2D and expect 3 colour channels (red, green,
+blue). The common trick:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.86mm,y=1mm]
+  \foreach \col/\title/\txt in {0/2D/{one slice,\\ copied into 3 channels}, 50/2.5D/{3 neighbouring slices\\ as the 3 channels}, 100/3D/{the whole stack at once}} {
+    \node[font=\small\bfseries] at (\col+12,29) {\title};
+    \node[font=\scriptsize, align=center] at (\col+12,-12) {\txt};
+  }
+  % 2D
+  \fill[dark!85, draw=white] (6,0) rectangle ++(14,14);
+  % 2.5D
+  \foreach \k/\c in {0/red,1/green!70!black,2/blue} {
+    \fill[dark!85, draw=\c, line width=1pt] ({52+\k*3},{\k*2.5}) rectangle ++(14,14);
+  }
+  \node[font=\scriptsize, text=muted] at (62,-4) {R \quad G \quad B};
+  % 3D
+  \foreach \k in {0,...,9} \fill[dark!85, draw=white, line width=0.3pt] ({102+\k*1.2},{\k*1}) rectangle ++(14,14);
+  % verdicts
+  \node[font=\scriptsize, text=wordline, align=center] at (12,-20) {\cmark\ simple, pretrained\\ \xmark\ no depth context};
+  \node[font=\scriptsize, text=wordline, align=center] at (62,-20) {\cmark\ pretrained\\ \cmark\ a little depth};
+  \node[font=\scriptsize, text=wordline, align=center] at (112,-20) {\cmark\ full depth\\ \xmark\ few good pretrained models};
+\end{tikzpicture}
+\caption{Three ways to feed slices. We used 2.5D (8 slice triplets per series). The winners found that once
+the model knows where to look, plain 2D works as well (Chapter~\ref{ch:winmodels}).}
+\label{fig:25d}
+\end{figure}
+
+\section{From many slices to one answer: pooling}
+
+A study gives many images (we used 8 triplets $\times$ 3 series = 24). Each goes through the backbone and becomes a
+feature vector. They must be combined into \emph{one} prediction per study: this is \term{pooling}.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \foreach \k/\w in {0/0.03,1/0.04,2/0.05,3/0.40,4/0.35,5/0.06,6/0.04,7/0.03} {
+    \fill[dark!85] ({\k*10.5},0) rectangle ++(8.5,8.5);
+    \fill[us!90] ({\k*10.5},14) rectangle ++(8.5,{\w*30});
+    \node[font=\scriptsize] at ({\k*10.5+4.25},{16+\w*30}) {\w};
+  }
+  \fill[them] (35.5,2.5) circle (1.3); \fill[them] (46.5,3.5) circle (1.1);
+  \node[font=\footnotesize, anchor=east] at (-2,4.5) {slices};
+  \node[font=\footnotesize, anchor=east] at (-2,18) {weights};
+  \node[font=\scriptsize, align=left, anchor=west] at (89,12) {\textbf{attention pooling}: a tiny network gives\\
+     each slice a weight (they sum to 1);\\ the study feature is the weighted average.\\[1mm]
+     Here the two slices that show the tear\\ (orange dots) get 75\,\% of the weight.};
+\end{tikzpicture}
+\caption{A tear is visible on two or three slices out of 24. A plain average would dilute it; attention pooling lets
+the model focus on the slices that matter. Because only the study has a label, not each slice, this setting is
+called \term{multiple-instance learning}.}
+\label{fig:attnpool}
+\end{figure}
+
+\section{From numbers to probabilities}
+
+The head outputs 12 raw numbers called \term{logits} (any value from $-\infty$ to $+\infty$). Each one is squeezed
+into a probability by the \term{sigmoid} function $\sigma(z) = 1/(1+e^{-z})$:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=8cm, height=4.6cm, xmin=-6, xmax=6, ymin=0, ymax=1, xlabel={logit $z$}, ylabel={$\sigma(z)$},
+    ymajorgrids, xmajorgrids, xtick={-6,-4,...,6}, ytick={0,0.5,1}, xlabel style={font=\footnotesize},
+    ylabel style={font=\footnotesize}]
+  \addplot[us, line width=1.4pt, domain=-6:6, samples=100] {1/(1+exp(-x))};
+  \addplot[only marks, mark=*, mark size=2pt, them] coordinates {(2.6,0.931)};
+  \node[font=\scriptsize, anchor=west, align=left] at (axis cs:-5.7,0.8) {Study K, ACL:\\ $z=2.6 \Rightarrow p=0.93$};
+\end{axis}
+\end{tikzpicture}
+\caption{The sigmoid. Each of the 12 findings has its own sigmoid, so all 12 can be high at the same time (a
+\emph{multi-label} model).}
+\end{figure}
+
+\section{The loss: how wrong is the model?}
+
+Training needs one number that says how bad the current predictions are: the \term{loss}. For yes/no labels the
+standard is \term{binary cross-entropy} (BCE):
+\[
+\text{BCE}(p, y) = -\big[\, y\log p + (1-y)\log(1-p) \,\big]
+\]
+where $p$ is the predicted probability and $y$ the label.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=9cm, height=5cm, xmin=0.01, xmax=0.99, ymin=0, ymax=3.2, xlabel={predicted probability $p$},
+    ylabel={loss}, ymajorgrids, xlabel style={font=\footnotesize}, ylabel style={font=\footnotesize},
+    legend style={at={(0.5,0.98)}, anchor=north}]
+  \addplot[them, line width=1.3pt, domain=0.02:0.98, samples=100] {-ln(x)};
+  \addplot[us, line width=1.3pt, domain=0.02:0.98, samples=100] {-ln(1-x)};
+  \addplot[third, line width=1.3pt, dashed, domain=0.02:0.98, samples=100] {-(0.7*ln(x)+0.3*ln(1-x))};
+  \addplot[only marks, mark=*, mark size=2pt, third] coordinates {(0.7,0.611)};
+  \legend{{label $y=1$}, {label $y=0$}, {soft label $y=0.7$}}
+\end{axis}
+\end{tikzpicture}
+\caption{BCE punishes confident mistakes hard: predicting 0.02 for a true positive costs 3.9. With a
+\term{soft label} such as 0.7 (``probably yes''), the loss is smallest exactly at $p=0.7$ (dot). That is how
+uncertain labels from reports can be used directly.}
+\label{fig:bce}
+\end{figure}
+
+\begin{keyidea}
+Soft labels let the model learn ``probably yes'' instead of a forced yes or no. Both our pipeline and the
+winners' trained on soft labels between 0 and 1.
+\end{keyidea}
+
+\begin{wordcheck}
+\term{Masked loss}: when a label is unknown (missing), it is simply left out of the loss, so it neither rewards nor
+punishes the model. Our training code did this for every missing label.
+\end{wordcheck}
+
+\section{The training loop}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  st/.style={draw=accent, fill=keyfill, rounded corners=2mm, minimum width=30mm, minimum height=11mm,
+             align=center, font=\footnotesize},
+  ar/.style={-{Stealth[length=2mm]}, line width=0.9pt, accent}]
+  \node[st] (a) at (0,18) {\textbf{1. batch}\\ take 8 studies};
+  \node[st] (b) at (48,18) {\textbf{2. forward}\\ predict 8 $\times$ 12};
+  \node[st] (c) at (48,-6) {\textbf{3. loss}\\ compare with labels};
+  \node[st] (d) at (0,-6) {\textbf{4. backward + update}\\ nudge all weights};
+  \draw[ar] (a) -- (b); \draw[ar] (b) -- (c); \draw[ar] (c) -- (d); \draw[ar] (d) -- (a);
+  \node[font=\footnotesize, align=left, anchor=west] at (72,6) {one turn = one \textbf{step}\\
+     all training studies once = one \textbf{epoch}\\[1mm]
+     ours: 8 studies per step,\\ \ca 440 steps per epoch, 10 epochs,\\ \ca 33--44 minutes on one T4 GPU};
+\end{tikzpicture}
+\caption{The loop. ``Backward'' computes, for every weight, which direction lowers the loss (the
+\term{gradient}); the \term{optimizer} (we and the winners used \term{AdamW}) takes a small step that way.}
+\end{figure}
+
+How big a step? That is the \term{learning rate}. It usually starts small (\term{warm-up}), then decreases
+smoothly (\term{cosine decay}):
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=9cm, height=4.4cm, xmin=0, xmax=10, ymin=0, ymax=3.4, xlabel={epoch},
+    ylabel={learning rate ($\times10^{-4}$)}, ymajorgrids, xlabel style={font=\footnotesize},
+    ylabel style={font=\footnotesize}]
+  \addplot[us, line width=1.4pt, domain=0:1, samples=20] {3*x};
+  \addplot[us, line width=1.4pt, domain=1:10, samples=60] {1.5*(1+cos(deg(pi*(x-1)/9)))};
+  \node[font=\scriptsize, anchor=west] at (axis cs:1.5,0.5) {ours: peak $3\cdot10^{-4}$, 1 warm-up epoch, cosine};
+\end{axis}
+\end{tikzpicture}
+\caption{Our learning-rate schedule. The winners used a lower, constant rate for one model and a higher one with
+a ``one-cycle'' schedule for another (Chapter~\ref{ch:winmodels}).}
+\end{figure}
+
+\section{Overfitting and augmentation}
+
+A model with millions of knobs can simply \emph{memorise} its training studies. It then looks perfect on them and
+poor on new ones: \term{overfitting}.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=8.5cm, height=4.6cm, xmin=0, xmax=20, ymin=0, ymax=1, xlabel={epoch}, ylabel={loss},
+    ytick=\empty, ymajorgrids, xlabel style={font=\footnotesize}, ylabel style={font=\footnotesize}]
+  \addplot[us, line width=1.3pt, domain=0:20, samples=60] {0.85*exp(-x/4)+0.05};
+  \addplot[them, line width=1.3pt, domain=0:20, samples=60] {0.75*exp(-x/3.5)+0.3+0.012*x};
+  \draw[ink, dashed] (axis cs:8,0) -- (axis cs:8,1);
+  \node[font=\scriptsize, anchor=west, text=us] at (axis cs:14,0.13) {training};
+  \node[font=\scriptsize, anchor=west, text=them] at (axis cs:14,0.58) {validation};
+  \node[font=\scriptsize, anchor=south west, align=left] at (axis cs:8.2,0.75) {stop around here:\\ beyond, it memorises};
+\end{axis}
+\end{tikzpicture}
+\caption{Typical curves. Training loss keeps falling; the loss on unseen studies stops improving and rises.}
+\end{figure}
+
+\term{Augmentation} fights overfitting: every time a study is shown, it is changed a little at random, so the
+model never sees exactly the same image twice.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+  \foreach \x/\lab in {0/original, 3.1/rotated, 6.2/zoomed, 9.3/brighter, 12.4/mirrored} {
+    \node[font=\scriptsize] at (\x+1.25,-0.35) {\lab};
+    \draw[grid] (\x,0) rectangle ++(2.5,3);
+  }
+  \begin{scope}[shift={(0.05,0.1)}, scale=0.235] \kneesagittal \end{scope}
+  \begin{scope}[shift={(3.35,0.25)}, scale=0.22, rotate=8] \kneesagittal \end{scope}
+  \begin{scope}[shift={(6.2,0)}] \clip (0,0) rectangle (2.5,3); \begin{scope}[shift={(-0.35,-0.45)}, scale=0.3] \kneesagittal \end{scope} \end{scope}
+  \begin{scope}[shift={(9.35,0.1)}, scale=0.235] \kneesagittal \fill[white, opacity=0.35] (0,0) rectangle (10.5,12); \end{scope}
+  \begin{scope}[shift={(14.85,0.1)}, xscale=-0.235, yscale=0.235] \kneesagittal \end{scope}
+\end{tikzpicture}
+\caption{Augmentations we used: small rotation, zoom and shift, brightness/contrast/gamma changes, and mirroring
+the whole knee left--right. All are applied on the GPU, per series, at random.}
+\label{fig:augment}
+\end{figure}
+
+\section{Validation: testing honestly}
+
+To know whether a change helps, you need studies the model did not train on. \term{K-fold cross-validation}
+splits the training studies into $k$ parts (\term{folds}), trains $k$ models, each with one fold held out:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.88mm,y=1mm]
+  \foreach \m in {0,...,4} {
+    \node[font=\scriptsize, anchor=east] at (-2,{-\m*6}) {model \m};
+    \foreach \f in {0,...,4} {
+      \ifnum\f=\m
+        \fill[them] ({\f*21},{-\m*6-2.2}) rectangle ++(20,4.4);
+        \node[font=\scriptsize, text=white] at ({\f*21+10},{-\m*6}) {validate};
+      \else
+        \fill[us!70] ({\f*21},{-\m*6-2.2}) rectangle ++(20,4.4);
+        \node[font=\scriptsize, text=white] at ({\f*21+10},{-\m*6}) {train};
+      \fi
+    }
+  }
+  \node[font=\footnotesize, align=left, anchor=west] at (110,-12) {every study is validated\\ exactly once\\
+     $\Rightarrow$ \textbf{out-of-fold (OOF)}\\ \hspace*{4mm}predictions for all 4,349};
+\end{tikzpicture}
+\caption{5-fold cross-validation. At submission time the 5 models are averaged (a free ensemble).}
+\label{fig:kfold}
+\end{figure}
+
+\begin{watchout}
+If studies from the same hospital are in both the training and the validation folds, the model can recognise the
+hospital (its scanner, its image style) and the score looks better than it will be on new hospitals. We split
+\textbf{by site}: all studies of one site proxy (report language + scanner vendor, 31 groups) go into the same
+fold. This is called \term{GroupKFold}.
+\end{watchout}
+
+\section{Ensembles and test-time augmentation}
+
+\begin{itemize}
+\item \term{Ensemble}: average the predictions of several models. Their mistakes partly cancel. It helps most when
+      the models are \emph{different} (other labels, other inputs), and very little when they are near-copies.
+\item \term{Rank averaging}: AUC only cares about order, so instead of averaging probabilities you can convert each
+      model's predictions to ranks (1st, 2nd, \ldots) and average those. This stops one over-confident model from
+      dominating.
+\item \term{Test-time augmentation} (TTA): predict on the original and on a mirrored copy, then average. We used
+      mirror TTA.
+\end{itemize}
+
+\begin{innumbers}
+Our EfficientNet-B0 and ConvNeXt-Nano models (one fold each, same images and labels) scored 0.886 and 0.898 on
+the 58 gold studies; their rank average scored 0.903. A small but typical ensemble gain.
+\end{innumbers}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can draw backbone $\rightarrow$ feature vector $\rightarrow$ head and say which part is pretrained.
+\done I know what 2.5D means, what pooling does, and why soft labels work with BCE.
+\done I can explain k-fold and why we grouped folds by site.
+\quiz Q5.1: Why use 3 neighbouring slices as the 3 channels instead of one slice copied 3 times?
+\quiz Q5.2: A label is 0.5 (``don't know''). What prediction minimises its BCE, and what does the model learn from it?
+\quiz Q5.3: Two models trained on the same images with the same labels and different random seeds. Will
+      ensembling them help a lot? Why?
+\end{itemize}
+\end{checkpoint}

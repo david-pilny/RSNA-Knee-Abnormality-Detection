@@ -1,0 +1,85 @@
+\chapter{Glossary}
+\label{app:glossary}
+
+\begin{multicols}{2}
+\small
+\setlength{\parskip}{0.35em}
+\newcommand{\gl}[2]{\textbf{#1}: #2\par}
+
+\gl{2.5D}{a 2D image model fed with a few neighbouring slices as its colour channels (Fig.~\ref{fig:25d}).}
+\gl{Agent}{a language model that calls tools in a loop until it is ready to answer (Fig.~\ref{fig:agentloop}).}
+\gl{Anatomy box (ROI)}{a box around the structure a finding concerns, present in healthy knees too (Fig.~\ref{fig:boxes}).}
+\gl{Attention pooling}{a weighted average of several feature vectors, with learned weights (Fig.~\ref{fig:attnpool}).}
+\gl{AUC (ROC-AUC)}{the chance that a random positive study scores higher than a random negative one (Ch.~\ref{ch:auc}).}
+\gl{Augmentation}{random changes to training images (rotation, brightness, mirroring) against overfitting.}
+\gl{Axial}{slices across the leg, from bottom to top.}
+\gl{Backbone}{the large, pretrained part of an image model that turns an image into features (Fig.~\ref{fig:backbone}).}
+\gl{Batch}{the group of studies processed in one training step (ours: 8).}
+\gl{BCE (binary cross-entropy)}{the standard loss for yes/no outputs; works with soft labels (Fig.~\ref{fig:bce}).}
+\gl{bf16 / fp16}{16-bit number formats for faster GPU maths. On a T4, use fp16.}
+\gl{Box pooling}{averaging image features only inside a finding's anatomy box (Fig.~\ref{fig:boxpool}).}
+\gl{Cache}{our pre-processed images: 3 arrays of 24\,$\times$\,256\,$\times$\,256 per study (Ch.~\ref{ch:cache}).}
+\gl{Calibration}{whether a predicted 0.8 really means ``80\,\% of such cases are positive''.}
+\gl{Code competition}{you submit a notebook; Kaggle runs it offline on hidden data.}
+\gl{Compartment}{one of three areas where cartilage surfaces meet: medial, lateral, patellofemoral (Fig.~\ref{fig:compartments}).}
+\gl{Confident error}{a label that is confidently wrong (high when the truth is negative, or the reverse).}
+\gl{Coronal}{slices from front to back; each slice is a front view.}
+\gl{Cross-validation (k-fold)}{train $k$ models, each validated on a different held-out part (Fig.~\ref{fig:kfold}).}
+\gl{DICOM}{the file format of medical images: header + pixels (Ch.~\ref{ch:data}).}
+\gl{Dropout}{switching off random parts of a network during training, against memorising.}
+\gl{EMA}{a slowly updated average of the model weights, often better than the latest weights.}
+\gl{Embedding}{a list of numbers that captures the meaning of a text or image.}
+\gl{Ensemble}{averaging several models' predictions.}
+\gl{Epoch}{one pass over all training studies.}
+\gl{Fat suppression (fat-sat)}{an MRI technique that switches off the fat signal so that fluid and swelling stand out.}
+\gl{Feature map}{the image-like output of a CNN layer; bright where a learned pattern occurs.}
+\gl{Fine-tuning}{continuing to train a pretrained model on your own task.}
+\gl{Fluid-sensitive}{a sequence in which water is bright (PD or T2, usually fat-suppressed).}
+\gl{Fold}{one of the $k$ parts in cross-validation.}
+\gl{Fork}{a copy of someone else's public notebook.}
+\gl{Frontier model}{the strongest hosted AI models of the time.}
+\gl{Gold labels}{the trusted reference labels: here the 58 studies labelled by radiologists from the images.}
+\gl{GroupKFold}{cross-validation that keeps related studies (here: one site) in the same fold.}
+\gl{Head}{the small final part of a model that turns features into outputs.}
+\gl{ImageNet}{1.2 million everyday photos; the usual pre-training data for image backbones.}
+\gl{Inference}{using a trained model to make predictions.}
+\gl{KV cache}{a language model's stored internal state for text it has already read; lets a shared prompt prefix be reused.}
+\gl{Lateral / medial}{the outer / inner side of the knee.}
+\gl{Learning rate}{how big a step the optimizer takes per training step.}
+\gl{Lesion box}{a tight box around a visible problem on one slice (Fig.~\ref{fig:boxes}).}
+\gl{LLM}{large language model.}
+\gl{Log loss}{the average BCE of predictions (or labels) against the truth; measures calibration as well as order.}
+\gl{Logit}{the raw output of a model before the sigmoid.}
+\gl{Loss}{one number that says how wrong the model currently is.}
+\gl{Macro average}{the plain average of the 12 per-finding AUCs.}
+\gl{Masked loss}{a loss that skips missing labels.}
+\gl{Member cell}{our code cell that blended our predictions into a public notebook (Fig.~\ref{fig:member}).}
+\gl{Mirror TTA}{predicting on the original and the left--right mirrored knee, then averaging.}
+\gl{Multi-label}{several yes/no questions about the same input at once.}
+\gl{Multiple-instance learning}{learning from a label that belongs to a group (a study) rather than to each item (slice).}
+\gl{OOF (out-of-fold)}{predictions for each training study from the model that did not train on it.}
+\gl{Overfitting}{memorising the training data instead of learning what generalises.}
+\gl{PD, T1, T2}{names of MRI sequences (Ch.~\ref{ch:mri}).}
+\gl{Pretrained}{already trained on other data before your task.}
+\gl{Public / private leaderboard}{scores on \ca 30\,\% / \ca 70\,\% of the hidden test set; the private one decides.}
+\gl{Quantization}{storing weights with fewer bits (e.g.\ 4) to save memory.}
+\gl{Rank averaging}{blending models by averaging the ranks of their predictions (Fig.~\ref{fig:rankblend}).}
+\gl{ROC curve}{true-positive rate against false-positive rate over all thresholds.}
+\gl{Role}{one of our three series slots: \code{sag\_fs}, \code{cor\_fs}, \code{ax\_fs}.}
+\gl{Sagittal}{slices from left to right; each slice is a side view.}
+\gl{Sequence}{the scanner settings that decide which tissues are bright.}
+\gl{Series}{one 3D stack of slices with one direction and one sequence.}
+\gl{Sigmoid}{the function that squeezes a logit into a probability between 0 and 1.}
+\gl{Slice}{one 2D MRI image; one DICOM file.}
+\gl{Soft label}{a label between 0 and 1 that expresses uncertainty.}
+\gl{SoftAUC}{AUC computed against soft reference labels, weighting each pair by how likely it is to be a positive/negative pair.}
+\gl{Stop rule}{a threshold for continuing an experiment, fixed before seeing the result.}
+\gl{Study}{one MRI exam of one knee; one row of labels.}
+\gl{T4}{the NVIDIA GPU that Kaggle offers (two of them, 16\,GB each).}
+\gl{Temperature scaling}{multiplying logits by a constant to make probabilities less (or more) confident.}
+\gl{Token}{a word piece; the unit a language model reads and writes.}
+\gl{Transfer learning}{reusing a model trained on one task as the start for another.}
+\gl{Voxel}{a 3D pixel; in knee MRI typically 0.4\,$\times$\,0.4\,$\times$\,3.5\,mm.}
+\gl{Weak supervision}{training on cheaper, noisier labels (here: from reports).}
+\gl{Weights}{the adjustable numbers inside a model.}
+\end{multicols}

@@ -1,0 +1,146 @@
+\chapter{Us vs.\ them}
+\label{ch:usvsthem}
+
+\begin{tldr}
+\begin{itemize}
+\item Same overall recipe (labels from reports $\rightarrow$ image model), very different ingredients.
+\item Most of the gap is \textbf{labels}: theirs came from agents that looked at the images. Next: \textbf{where to look}
+      (anatomy boxes), \textbf{input size} and \textbf{compute}.
+\item Several of our choices matched theirs exactly. What we lacked were the big early decisions, and one unchecked rule.
+\end{itemize}
+\end{tldr}
+
+\section{Side by side}
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{>{\bfseries}l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X}
+\toprule
+ & \textcolor{us}{Us} & \textcolor{them}{Winners} \\
+\midrule
+Label source & open LLM (Qwen2.5-32B) reads the report & frontier AI agents read the report \emph{and} view the images \\
+Label quality (gold AUC) & 0.879 & 0.936--0.943 \\
+Label checks & AUC on gold & AUC, log loss, confident errors; temperature calibration \\
+Extra supervision & none & anatomy boxes, lesion boxes, report embedding \\
+Series & 3 (fluid-sensitive) & 5 (+ structural) \\
+Slices & 24, resampled & up to 64 native \\
+Pixel size & 0.55\,mm & 0.27--0.36\,mm \\
+Left/right & mirror augmentation & canonical side + side-aware boxes \\
+Backbones & EfficientNet-B0, ConvNeXt-Nano & ConvNeXt-T, MaxViT-V2-B, CoAtNet-2, MambaOut-B+ \\
+Pooling & attention over whole slices & box pooling inside anatomy boxes \\
+Validation & gold-58 + report-label folds & a ruler chosen by its correlation with the leaderboard \\
+Compute & Kaggle T4s, \ca 30\,h/week & bf16-capable GPUs; thousands of agent sessions \\
+Workflow & human + AI assistant, one experiment at a time & humans + AI agents proposing and running experiments \\
+\midrule
+Own model, public & 0.918 & 0.964 (one model) \\
+Final, private & 0.927 (rank 2,968) & 0.960 (rank 1) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Where the gap came from}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1.6mm]
+  % y: 0 = 0.895 ... 50 = 0.945 (1 unit = 0.001)
+  \draw[muted] (0,0) -- (130,0);
+  \foreach \v in {0.90,0.91,0.92,0.93,0.94} {
+    \draw[grid] (0,{(\v-0.895)*1000}) -- (130,{(\v-0.895)*1000});
+    \node[font=\scriptsize, anchor=east] at (-1,{(\v-0.895)*1000}) {\v};
+  }
+  % bars
+  \fill[us] (5,0) rectangle (25,{(0.904-0.895)*1000});
+  \node[font=\scriptsize\bfseries, anchor=south] at (15,{(0.904-0.895)*1000}) {0.904};
+  \fill[them!40] (32,{(0.904-0.895)*1000}) rectangle (52,{(0.932-0.895)*1000});
+  \node[font=\scriptsize\bfseries, anchor=south] at (42,{(0.932-0.895)*1000}) {+0.028};
+  \fill[them] (59,0) rectangle (79,{(0.932-0.895)*1000});
+  \node[font=\scriptsize\bfseries, anchor=south] at (69,{(0.932-0.895)*1000}) {0.932};
+  \fill[them!40] (86,{(0.932-0.895)*1000}) rectangle (106,{(0.943-0.895)*1000});
+  \node[font=\scriptsize\bfseries, anchor=south] at (96,{(0.943-0.895)*1000}) {+0.011};
+  \fill[them] (113,0) rectangle (133,{(0.943-0.895)*1000});
+  \node[font=\scriptsize\bfseries, anchor=south] at (123,{(0.943-0.895)*1000}) {0.943};
+  % labels
+  \foreach \x/\t in {15/{our best\\ single model\\ (B0, 256\,px)}, 42/{labels + input\\ + backbone}, 69/{their plain\\ per-slice\\ ConvNeXt-T},
+                     96/{boxes, crop,\\ calibration,\\ extra heads}, 123/{their full\\ model at\\ 256\,px}}
+    \node[font=\scriptsize, align=center, anchor=north] at (\x,-1) {\t};
+\end{tikzpicture}
+\caption{Gold macro AUC, all at 256\,px with 5 fold models. The first jump (orange, light) is mostly labels; the second is
+everything that tells the model where to look. Caveats: different fold splits, and the winners' gold numbers are slightly
+optimistic. The vertical axis starts at 0.895.}
+\label{fig:gap}
+\end{figure}
+
+On the leaderboard the gaps are larger, because the winners also scaled up: 384\,px, more series, bigger backbones and an
+ensemble took them from a 0.964 single model to 0.969 public.
+
+\section{What we got right}
+
+\begin{itemize}
+\item[\cmark] \textbf{Same preprocessing basics:} 140\,mm field of view, per-series 0.5/99.5 percentile scaling,
+      canonical orientation, sorting by physical position.
+\item[\cmark] \textbf{Threshold-aware soft labels}, with ``not mentioned'' kept separate from ``absent'' and
+      ``unclear'' kept uncertain.
+\item[\cmark] \textbf{Probabilities, not bins}: our letter probabilities and their continuous outputs.
+\item[\cmark] \textbf{A side classifier} (98.8\,\% vs.\ their 99.3\,\%) and \textbf{a joint crop}: the right ideas,
+      without the boxes that made them pay off.
+\item[\cmark] \textbf{Input diversity beats backbone diversity}: we wrote that lesson down in early October; their
+      6-channel models confirmed it.
+\item[\cmark] \textbf{Cheap, rule-based experiments}: one fold, a stop rule written in advance, stop when it fails.
+\end{itemize}
+
+\section{Seven lessons}
+
+\begin{tcolorbox}[enhanced, colback=keyfill, colframe=keyline, boxrule=0.6pt, arc=1.5mm, fontupper=\small,
+   left=3mm, right=3mm, title={\faLightbulb[regular]\ \ Seven lessons}, fonttitle=\bfseries, coltitle=white, colbacktitle=keyline]
+\begin{enumerate}[leftmargin=5mm, itemsep=0.4em]
+\item \textbf{Read the rules threads on day one, and verify every self-imposed rule.} Our ``no hosted LLM'' rule was a
+      guess. It shaped everything that followed.
+\item \textbf{When the labels are weak, improve the labels, not the model.} Every model-side change we tried was worth
+      $\leq$ +0.003; better labels were worth +0.016 to us and +0.013 to them on the same model.
+\item \textbf{Labels must see what the target sees.} The gold labels came from images; report-only labels cannot know
+      what the report leaves out.
+\item \textbf{Judge training labels by calibration as well as AUC.} Confidently wrong labels teach confident mistakes.
+\item \textbf{Tell the model where to look.} Anatomy boxes turned ``medial vs.\ lateral'' from something to learn into
+      something given.
+\item \textbf{Build a ruler you can trust before you optimise.} 58 studies cannot resolve 0.01; the winners
+      chose their validation by how well it predicted the leaderboard.
+\item \textbf{Look at the public work early}, and at what the top teams do differently, not just at what scores 0.94.
+\end{enumerate}
+\end{tcolorbox}
+
+\section{If we started again}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  wk/.style={draw=accent, fill=keyfill, rounded corners=2mm, text width=44mm, minimum height=40mm, align=left,
+             font=\scriptsize, anchor=north, inner sep=2.5mm}]
+  \node[wk] at (0,0) {\textbf{\small Week 1: rules and labels}\\[1mm]
+    $\bullet$ read rules + pinned threads\\ $\bullet$ read the public notebooks and write-ups\\
+    $\bullet$ simple baseline end to end\\ $\bullet$ label the 58 gold studies with an image-reading agent; compare with report-only labels\\
+    $\bullet$ fix the validation ruler};
+  \node[wk] at (49,0) {\textbf{\small Week 2: where to look}\\[1mm]
+    $\bullet$ label all studies with the best agent setup\\ $\bullet$ anatomy boxes on a few hundred studies $\rightarrow$ detector\\
+    $\bullet$ model with box pooling + report-embedding head\\ $\bullet$ calibrate labels};
+  \node[wk] at (98,0) {\textbf{\small Week 3: scale and finish}\\[1mm]
+    $\bullet$ bigger input (native slices, 384\,px, 5 series)\\ $\bullet$ a few diverse models (labels, inputs)\\
+    $\bullet$ a fast single-model notebook for the efficiency track\\ $\bullet$ pick two finals early};
+  \draw[-{Stealth[length=2.5mm]}, line width=1pt, muted] (-22,-44) -- (122,-44);
+\end{tikzpicture}
+\caption{A plan built from both write-ups and our own mistakes. Most of it is about \emph{data}, not models.}
+\end{figure}
+
+\begin{keyidea}
+Our pipeline was a sound, well-tested version of the obvious approach, and it scored like one. The winners changed
+the problem itself: they made better training data, and made it in a form (probabilities plus boxes) that the model
+could use. In a competition with only 58 labelled examples, \textbf{that is where the points were}.
+\end{keyidea}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can explain, in two sentences, why the winners scored 0.960 and we scored 0.927.
+\done I can name three things we did the same way as the winners.
+\quiz Q14.1: Which single lesson would have changed our result most, and why?
+\quiz Q14.2: Could we have used anatomy boxes without hosted LLMs? How?
+\end{itemize}
+\end{checkpoint}

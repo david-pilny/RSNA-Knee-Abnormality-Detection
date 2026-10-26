@@ -1,0 +1,228 @@
+\chapter{Step 2: images into a cache}
+\label{ch:cache}
+\whereami{3}
+
+\begin{tldr}
+\begin{itemize}
+\item Reading DICOM files is slow, so we did it \textbf{once} and saved every study as three small 3D arrays: the
+      \textbf{cache}.
+\item Per study: pick 3 series (sagittal, coronal, axial, fluid-sensitive), \textbf{sort} the slices,
+      \textbf{rotate/flip} them to one convention, \textbf{normalise} brightness, \textbf{crop} 140\,mm around the knee,
+      \textbf{resize} to 24 slices of 256\,$\times$\,256 pixels.
+\item The same Python file prepares the hidden test images inside the submission, so training and test images are
+      made \textbf{identically}.
+\end{itemize}
+\end{tldr}
+
+\section{Why a cache?}
+
+Training reads every study 10 times per model, and we trained 5 models per experiment. Decoding hundreds of thousands of
+DICOM files each time would take hours. Decoding once (\ca 1.5--2 hours of CPU) and saving compact arrays makes every
+later experiment fast.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.95mm,y=1mm,
+  st/.style={draw=accent, fill=keyfill, rounded corners=1.5mm, minimum width=20mm, minimum height=13mm,
+             align=center, font=\scriptsize, text width=19mm},
+  ar/.style={-{Stealth[length=1.6mm]}, line width=0.7pt, accent}]
+  \foreach \i/\t in {0/{\textbf{a} pick\\ 3 series}, 1/{\textbf{b} sort\\ slices}, 2/{\textbf{c} same\\ orientation},
+                     3/{\textbf{d} note\\ left/right}, 4/{\textbf{e} normalise\\ brightness}, 5/{\textbf{f} crop\\ the knee},
+                     6/{\textbf{g} resize\\ 24$\times$256$\times$256}} {
+    \node[st] (n\i) at ({\i*22.5},0) {\t};
+  }
+  \foreach \i [evaluate=\i as \j using int(\i+1)] in {0,...,5} \draw[ar] (n\i) -- (n\j);
+  \node[font=\scriptsize, text=muted] at (0,-11) {\faFolder\ DICOM files};
+  \node[font=\scriptsize, text=muted] at (135,-11) {\faCube\ 3 arrays per study};
+\end{tikzpicture}
+\caption{The seven steps, applied to every study. The code lives in one file, \code{knee\_preproc.py}, saved together
+with the cache.}
+\label{fig:cacheflow}
+\end{figure}
+
+\section{a. Pick one series per role}
+
+A study has about 5.5 series. We keep three \term{roles}: \code{sag\_fs}, \code{cor\_fs}, \code{ax\_fs} (sagittal,
+coronal, axial; fluid-sensitive). \code{train\_series.csv} says what each series is; a small score picks the best:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  ser/.style={draw=grid, fill=white, rounded corners=1mm, minimum width=34mm, minimum height=8mm, font=\scriptsize,
+              align=left, anchor=west},
+  win/.style={ser, draw=us, line width=0.9pt, fill=keyfill}]
+  \node[ser] at (0,20) {Sagittal, fluid, fat-sat \hfill \textbf{7}};
+  \node[ser] at (0,10) {Sagittal, T1 \hfill 1};
+  \node[ser] at (0,0)  {Coronal, fluid, fat-sat \hfill \textbf{7}};
+  \node[ser] at (0,-10) {Coronal, T1 \hfill 1};
+  \node[ser] at (0,-20) {Axial, fluid, fat-sat \hfill \textbf{7}};
+  \node[win] (r1) at (70,20) {\code{sag\_fs}};
+  \node[win] (r2) at (70,0) {\code{cor\_fs}};
+  \node[win] (r3) at (70,-20) {\code{ax\_fs}};
+  \foreach \y in {20,0,-20} \draw[-{Stealth}, us, line width=0.8pt] (35,\y) -- (69,\y);
+  \node[font=\scriptsize, align=left, anchor=west] at (108,0) {score =\\ \hspace*{2mm}4 if fluid-sensitive\\
+     \hspace*{2mm}+ 2 if also fat-suppressed\\ \hspace*{2mm}+ 1 if 12--80 slices\\[1mm] highest score wins;\\
+     no fluid series in a plane:\\ take any (``fallback'')};
+\end{tikzpicture}
+\caption{Series selection for one study. All three roles were available in 100\,\% of training studies.}
+\end{figure}
+
+\section{b. Sort the slices}
+
+File names are random IDs. The only reliable order is the physical one: project each slice's
+\code{ImagePositionPatient} onto the slice direction and sort by that number.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \foreach \k/\o in {0/3,1/0,2/5,3/1,4/4,5/2} {
+    \pgfmathsetmacro{\g}{35+\o*9}
+    \fill[dark!\g] ({\k*9},0) rectangle ++(7,10);
+    \node[font=\tiny] at ({\k*9+3.5},-2.5) {\o};
+  }
+  \node[font=\scriptsize, align=center] at (25,-8) {sorted by file name: jumbled};
+  \draw[-{Stealth}, line width=1pt, muted] (58,5) -- (72,5);
+  \foreach \k in {0,...,5} {
+    \pgfmathsetmacro{\g}{35+\k*9}
+    \fill[dark!\g] ({78+\k*9},0) rectangle ++(7,10);
+    \node[font=\tiny] at ({78+\k*9+3.5},-2.5) {\k};
+  }
+  \node[font=\scriptsize, align=center] at (103,-8) {sorted by position (mm): correct};
+\end{tikzpicture}
+\caption{Wrong slice order turns a 3D stack into noise for anything that looks at neighbouring slices.}
+\end{figure}
+
+\section{c. One orientation for everybody}
+
+Sites store the same plane in different ways: rotated, mirrored, upside down. The header's
+\code{ImageOrientationPatient} says how, so every series can be flipped or transposed into one convention (for
+sagittal: front of the knee on the left, head at the top).
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+  \foreach \x/\lab in {0/{site A}, 2.3/{site B}, 4.6/{site C}, 6.9/{site D}} {
+    \draw[grid] (\x,0) rectangle ++(2,2.3);
+    \node[font=\scriptsize] at (\x+1,-0.3) {\lab};
+  }
+  \begin{scope}[shift={(0.05,0.05)}, scale=0.19] \kneesagittal \end{scope}
+  \begin{scope}[shift={(4.25,0.05)}, xscale=-0.19, yscale=0.19] \kneesagittal \end{scope}
+  \begin{scope}[shift={(4.65,2.25)}, xscale=0.19, yscale=-0.19] \kneesagittal \end{scope}
+  \begin{scope}[shift={(8.9,0.28)}, rotate=90, scale=0.165] \kneesagittal \end{scope}
+  \draw[-{Stealth}, line width=1pt, muted] (9.3,1.15) -- (10.6,1.15);
+  \draw[accent, line width=1pt] (11,0) rectangle ++(2,2.3);
+  \begin{scope}[shift={(11.05,0.05)}, scale=0.19] \kneesagittal \end{scope}
+  \node[font=\scriptsize\bfseries, text=accent] at (12,-0.3) {canonical};
+\end{tikzpicture}
+\caption{Four ways the same sagittal image can be stored, and the one convention every series is turned into. We
+checked that five real storage variants of one series produced identical output.}
+\end{figure}
+
+\section{d. Left or right knee: written down, not changed}
+
+For a right knee the medial side is towards the patient's left, for a left knee the other way. The cache keeps the
+patient's own orientation and records the \code{Laterality} tag (present in 49.8\,\% of studies) so a later step can
+mirror left knees if wanted. We tried that in Chapter~\ref{ch:experiments} (``v7'').
+
+\section{e. Normalise the brightness}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=10cm, height=4.6cm, xmin=0, xmax=3000, ymin=0, ymax=1.15, ytick=\empty, axis y line=none,
+    axis x line*=bottom, xlabel={raw pixel value of one series}, xlabel style={font=\footnotesize},
+    xticklabel style={font=\scriptsize}, scaled x ticks=false]
+  \addplot[fill=us!25, draw=us, domain=0:3000, samples=150] {1.0*exp(-((x-40)/45)^2) + 0.45*exp(-((x-700)/220)^2) + 0.25*exp(-((x-1400)/260)^2) + 0.03*exp(-((x-2600)/200)^2)} \closedcycle;
+  \draw[them, line width=1.2pt, dashed] (axis cs:15,0) -- (axis cs:15,1.1) node[above, font=\scriptsize] {0.5\,\%};
+  \draw[them, line width=1.2pt, dashed] (axis cs:2150,0) -- (axis cs:2150,1.1) node[above, font=\scriptsize] {99.5\,\%};
+  \node[font=\scriptsize, align=left, anchor=west] at (axis cs:120,0.8) {air (background)};
+  \node[font=\scriptsize, align=center] at (axis cs:1050,0.6) {tissue};
+  \node[font=\scriptsize, align=center] at (axis cs:2600,0.3) {rare bright\\ outliers};
+\end{axis}
+\end{tikzpicture}
+\caption{Per series: find the 0.5th and 99.5th percentile, map that range to 0--255, clip the rest. Outliers no longer
+decide the contrast, and every series ends up on the same scale (compare Chapter~\ref{ch:mri}).}
+\end{figure}
+
+\section{f. Crop the knee}
+
+The field of view varies between sites (often 150--200\,mm), and much of it is thigh and shin. We found the knee
+automatically and cut a fixed square around it:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.5]
+  \fill[black] (-1.5,-1.0) rectangle (11.5,13.0);
+  \begin{scope}[shift={(0,0)}]
+    \clip (-1.5,-1.0) rectangle (11.5,13.0);
+    \kneecoronal
+  \end{scope}
+  \draw[us, line width=1.6pt, dashed] (0.5,0.5) rectangle (9.5,9.5);
+  \node[font=\scriptsize\bfseries, text=us, fill=white, inner sep=1pt, anchor=south west] at (0.5,9.6) {140\,mm (v5)};
+  \draw[them, line width=1.6pt] (2.1,2.3) rectangle (7.9,8.1);
+  \node[font=\scriptsize\bfseries, text=them, fill=white, inner sep=1pt, anchor=north west] at (2.1,2.2) {90\,mm (v8)};
+  \node[font=\scriptsize\bfseries, text=white, anchor=north west] at (-1.4,12.9) {full field of view, e.g.\ 200\,mm};
+\end{tikzpicture}\hspace{6mm}
+\begin{minipage}[b]{0.42\linewidth}\small
+\textbf{How the knee is found:}
+\begin{enumerate}
+\item average all slices of the series into one image;
+\item ``tissue'' = pixels brighter than 30\,\% of the 99th percentile;
+\item the tissue box = rows and columns that are at least 5\,\% tissue;
+\item centre a 140\,mm square on that box (pad with black if the image is smaller).
+\end{enumerate}
+We stored how much tissue fell outside (\code{tissue\_outside}) to check that no knee was cut.\par\medskip
+\end{minipage}
+\caption{The crop window. The bigger the window, the less detail per millimetre after resizing to 256 pixels.}
+\label{fig:crop}
+\end{figure}
+
+\section{g. Resize to one shape}
+
+Every series becomes exactly \textbf{24 slices of 256\,$\times$\,256 pixels}, stored as 8-bit integers (0--255):
+linear interpolation between slices, smooth (anti-aliased) resizing within a slice.
+
+\begin{center}\footnotesize
+\begin{tabular}{lllll}
+\toprule
+Cache & Window & Pixels & mm/pixel & Result (Chapter~\ref{ch:experiments}) \\
+\midrule
+first (v1--v4) & whole field of view & 224 & \ca 0.7--0.9 & 0.905 public \\
+\textbf{v5} & 140\,mm around the knee & 256 & 0.55 & \textbf{0.918} public \\
+v6 & 130\,mm & 320 & 0.41 & +0.002--0.004 val.: stopped \\
+v8 & 90\,mm on the joint & 256 & 0.35 & prepared; result not recorded \\
+\midrule
+\textcolor{them}{winners} & 140\,mm; 112\,mm on the joint & 384--512 & 0.27--0.36 & 0.960 private \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{innumbers}
+One study = 3 roles $\times$ 24 $\times$ 256 $\times$ 256 bytes $\approx$ 4.7\,MB, so the whole training set is
+\ca 21\,GB in memory. Kaggle notebooks may output at most 500 files and 20\,GB, so the cache was written as
+\textbf{45 compressed shards} of 100 studies each.
+\end{innumbers}
+
+\section{The same code at test time}
+
+\begin{keyidea}
+The submission notebook imports the \emph{same} \code{knee\_preproc.py} from the cache dataset and runs it on the
+hidden test DICOMs. Any difference between training and test preparation (another resize method, another
+orientation rule) would silently cost score, and you would never see why.
+\end{keyidea}
+
+\begin{watchout}
+24 slices per series is a compromise. Native series have 20--40 slices; resampling to 24 blurs thin structures
+across slices. The winners kept up to 64 \emph{native} slices and higher in-plane resolution, and used five series
+instead of three. That costs much more GPU time, which on Kaggle's free T4s we did not have.
+\end{watchout}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can list the seven preparation steps and say why each is needed.
+\done I know why the cache module is reused in the submission.
+\quiz Q8.1: Why normalise each series separately instead of the whole dataset at once?
+\quiz Q8.2: Cropping from 200\,mm to 140\,mm and keeping 256 pixels: how much finer does each pixel get?
+\quiz Q8.3: The cache does not mirror left knees. What would go wrong if it mirrored only the sagittal series?
+\end{itemize}
+\end{checkpoint}

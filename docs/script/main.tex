@@ -1,0 +1,42 @@
+\documentclass[11pt,a4paper,openany,twoside]{book}
+\input{preamble}
+\input{figdata/numbers}
+\input{figs/knee}
+
+\title{Knee MRI, Labels and Leaderboards}
+\begin{document}
+
+\frontmatter
+\input{chapters/00_title}
+{\hypersetup{linkcolor=ink}\tableofcontents}
+\input{chapters/00_howto}
+
+\mainmatter
+\part{The problem}
+\input{chapters/01_competition}
+\input{chapters/02_knee}
+\input{chapters/03_mri}
+\input{chapters/04_data}
+
+\part{Machine-learning fundamentals}
+\input{chapters/05_toolbox}
+\input{chapters/06_auc}
+
+\part{What we built}
+\input{chapters/07_labels}
+\input{chapters/08_cache}
+\input{chapters/09_model}
+\input{chapters/10_submission}
+\input{chapters/11_experiments}
+
+\part{The winners}
+\input{chapters/12_winners_labels}
+\input{chapters/13_winners_models}
+\input{chapters/14_us_vs_them}
+
+\appendix
+\input{chapters/A_glossary}
+\input{chapters/B_answers}
+\input{chapters/C_credits}
+
+\end{document}

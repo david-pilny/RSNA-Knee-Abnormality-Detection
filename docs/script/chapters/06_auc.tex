@@ -1,0 +1,212 @@
+\chapter{Measuring success: ROC-AUC}
+\label{ch:auc}
+
+\begin{tldr}
+\begin{itemize}
+\item \textbf{Accuracy is useless} when positives are rare: ``always no'' scores 98\,\% on MCL.
+\item \textbf{AUC} = the share of (sick, healthy) pairs that the model puts in the right order. 0.5 = random, 1 = perfect.
+\item Only the \textbf{order} of the predictions matters, never their exact values.
+\item With few test cases AUC is \textbf{noisy}: on our 58 gold studies, $\pm$0.02 macro is luck.
+\end{itemize}
+\end{tldr}
+
+\section{Why not just count correct answers?}
+
+\begin{example}
+In our report labels, only about 2\,\% of studies have a high-grade MCL tear. A ``model'' that always answers
+\emph{no} is right 98\,\% of the time. Its accuracy is excellent, and it is completely useless: it finds no tears.
+\end{example}
+
+We need a score that rewards \emph{finding the sick ones} and does not care how rare they are. That is ROC-AUC.
+
+\section{AUC as a ranking game}
+
+Give the model 8 studies. It returns a score for each; sort them from highest to lowest:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \draw[muted, -{Stealth}] (0,0) -- (132,0) node[right, font=\scriptsize] {score};
+  \foreach \s/\p/\n in {95/1/S1, 85/1/S2, 70/0/S3, 60/1/S4, 40/0/S5, 30/0/S6, 20/0/S7, 10/0/S8} {
+    \pgfmathsetmacro{\x}{\s*1.25}
+    \ifnum\p=1
+      \fill[them] (\x,6) circle (2.6);
+      \node[font=\scriptsize\bfseries, text=white] at (\x,6) {+};
+    \else
+      \fill[us] (\x,6) circle (2.6);
+      \node[font=\scriptsize\bfseries, text=white] at (\x,6) {--};
+    \fi
+    \node[font=\scriptsize] at (\x,11.5) {\n};
+    \node[font=\scriptsize, text=muted] at (\x,-3.5) {0.\s};
+  }
+  % the one wrong pair
+  \draw[warnline, line width=0.8pt, -{Stealth}] (75,15.5) to[bend left=35] (87.5,15.5);
+  \node[font=\scriptsize, text=warnline, align=center] at (81,22) {the only pair in the wrong order:\\ S3 (healthy) above S4 (sick)};
+\end{tikzpicture}
+\caption{Eight studies on the model's score axis (higher score to the right). Orange~+ = has the finding,
+blue~-- = does not.}
+\label{fig:rankgame}
+\end{figure}
+
+Now form every pair of one sick and one healthy study: $3 \times 5 = 15$ pairs. Count the pairs where the sick one
+has the higher score:
+\begin{itemize}
+\item S1 beats all 5 healthy ones: 5 \quad S2 beats all 5: 5 \quad S4 beats S5--S8 but not S3: 4.
+\end{itemize}
+\[
+\text{AUC} = \frac{5+5+4}{15} = \frac{14}{15} = 0.933
+\]
+
+\begin{keyidea}
+\textbf{AUC is the probability that a random sick study gets a higher score than a random healthy one.}
+It does not depend on how rare the finding is, and it does not depend on the scores themselves, only on
+their order.
+\end{keyidea}
+
+\section{The ROC curve}
+
+The same number has a picture. Move a threshold from the top score down. At each step, count the sick studies above
+the threshold (\term{true-positive rate}, TPR) and the healthy ones above it (\term{false-positive rate}, FPR):
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=6.3cm, height=6.3cm, xmin=0, xmax=1, ymin=0, ymax=1.02, xlabel={false-positive rate},
+    ylabel={true-positive rate}, xtick={0,0.2,...,1}, ytick={0,0.333,0.667,1}, yticklabels={0,1/3,2/3,1},
+    xlabel style={font=\footnotesize}, ylabel style={font=\footnotesize}, grid=major]
+  \addplot[fill=us!15, draw=none] coordinates {(0,0) (0,0.667) (0.2,0.667) (0.2,1) (1,1) (1,0)} \closedcycle;
+  \addplot[us, line width=1.5pt, mark=*, mark size=1.6pt] coordinates
+     {(0,0) (0,0.333) (0,0.667) (0.2,0.667) (0.2,1) (0.4,1) (0.6,1) (0.8,1) (1,1)};
+  \addplot[muted, dashed] coordinates {(0,0) (1,1)};
+  \node[font=\footnotesize] at (axis cs:0.6,0.45) {area = 0.933};
+  \node[font=\scriptsize, anchor=west] at (axis cs:0.02,0.28) {S1};
+  \node[font=\scriptsize, anchor=west] at (axis cs:0.02,0.62) {S2};
+  \node[font=\scriptsize, anchor=south] at (axis cs:0.1,0.67) {S3};
+  \node[font=\scriptsize, anchor=west] at (axis cs:0.21,0.9) {S4};
+\end{axis}
+\end{tikzpicture}\hspace{6mm}
+\begin{minipage}[b]{0.42\linewidth}\small
+Start at (0,0). Walk down the sorted list:
+\begin{itemize}
+\item a \textcolor{them}{\textbf{sick}} study: step \textbf{up} by 1/3;
+\item a \textcolor{us}{\textbf{healthy}} study: step \textbf{right} by 1/5.
+\end{itemize}
+The area under the staircase is the AUC. A perfect model goes straight up, then right (area 1). A random model
+follows the dashed diagonal (area 0.5).\par\bigskip
+\end{minipage}
+\caption{The ROC curve of the 8-study example. ROC = ``receiver operating characteristic'', a name from radar
+engineering; AUC = ``area under the curve''.}
+\end{figure}
+
+\section{Real curves from our model}
+
+These are the actual ROC curves of our v4 model (5 folds, EfficientNet-B0) on the 58 gold studies:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=7.2cm, height=7.2cm, xmin=0, xmax=1, ymin=0, ymax=1, xlabel={false-positive rate},
+    ylabel={true-positive rate}, xlabel style={font=\footnotesize}, ylabel style={font=\footnotesize}, grid=major,
+    legend style={at={(0.97,0.03)}, anchor=south east}]
+  \addplot[them, line width=1.4pt, const plot] table[x=fpr, y=tpr] {figdata/roc_eff.dat};
+  \addplot[us, line width=1.4pt, const plot] table[x=fpr, y=tpr] {figdata/roc_acl.dat};
+  \addplot[third, line width=1.4pt, const plot] table[x=fpr, y=tpr] {figdata/roc_syn.dat};
+  \addplot[muted, dashed] coordinates {(0,0) (1,1)};
+  \legend{{Effusion: \auceff}, {ACL: \aucacl}, {Synovitis: \aucsyn}}
+\end{axis}
+\end{tikzpicture}
+\caption{Effusion and ACL are found well; Synovitis is our weakest finding. With only \goldPosSyn{} synovitis
+positives among the 58 studies the staircase has large steps: every single study moves the curve.}
+\label{fig:realroc}
+\end{figure}
+
+\section{Twelve AUCs become one: the macro average}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[xbar, width=10cm, height=7cm, bar width=2.6mm, xmin=0.6, xmax=1.02,
+    symbolic y coords={Fracture,Contusion,Baker's,Synovitis,Effusion,PF OA,Lat.~OA,Med.~OA,Lat.~meniscus,Med.~meniscus,MCL,ACL},
+    ytick=data, y tick label style={font=\footnotesize}, xtick={0.6,0.7,0.8,0.9,1.0},
+    xmajorgrids, nodes near coords, nodes near coords style={font=\scriptsize, anchor=west},
+    point meta=explicit symbolic, enlarge y limits=0.05]
+  \addplot[barus] coordinates {(0.934,ACL) [0.934] (0.887,MCL) [0.887] (0.900,Med.~meniscus) [0.900]
+     (0.784,Lat.~meniscus) [0.784] (0.977,Med.~OA) [0.977] (0.820,Lat.~OA) [0.820] (0.900,PF OA) [0.900]
+     (0.955,Effusion) [0.955] (0.711,Synovitis) [0.711] (0.980,Baker's) [0.980] (0.901,Contusion) [0.901]
+     (0.865,Fracture) [0.865]};
+  \addplot[them, line width=1.2pt, dashed, nodes near coords={}] coordinates {(0.884,Fracture) [] (0.884,ACL) []};
+\end{axis}
+\end{tikzpicture}
+\caption{Our v4 model on the 58 gold studies, per finding. The dashed line is the macro average, \goldMacro.
+Synovitis, Lateral meniscus and Lateral OA pull it down most.}
+\label{fig:perfinding}
+\end{figure}
+
+\begin{why}
+The competition uses the \emph{macro} average (each finding counts 1/12) so that a model cannot ignore the rare
+findings. Improving Synovitis from 0.71 to 0.81 lifts the score by $0.10/12 \approx 0.008$, as much as improving every
+finding by 0.008.
+\end{why}
+
+\section{Only the order matters}
+
+Because AUC only looks at the order of scores:
+\begin{itemize}
+\item multiplying all predictions by 10, squaring them or passing them through any increasing function changes
+      nothing;
+\item a model can be badly \emph{calibrated} (its 0.8 does not mean ``80\,\% chance'') and still have a perfect AUC;
+\item to combine models, you can average their \textbf{ranks} instead of their probabilities (Chapter~\ref{ch:submission}).
+\end{itemize}
+
+\begin{watchout}
+Calibration does not matter for the \emph{score}, but it matters for \emph{training labels}. A label of 0.98 that
+should be 0.6 teaches the model to be confidently wrong. The winners judged their labels on calibration too
+(Chapter~\ref{ch:winlabels}).
+\end{watchout}
+
+\section{How noisy is an AUC?}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[ybar interval, width=10cm, height=4.8cm, xmin=0.82, xmax=0.94, ymin=0, ymax=330, xlabel={macro AUC on a resampled gold set},
+    ytick=\empty, axis y line=none, axis x line*=bottom, xlabel style={font=\footnotesize},
+    xtick={0.82,0.84,...,0.94}, xticklabel style={/pgf/number format/fixed, /pgf/number format/precision=2}]
+  \addplot[fill=us!70, draw=white] table[x=left, y=n] {figdata/gold_bootstrap.dat};
+  \draw[them, line width=1.4pt] (axis cs:0.884,0) -- (axis cs:0.884,300);
+  \node[font=\scriptsize, text=them!85!black, anchor=west] at (axis cs:0.886,290) {measured: \goldMacro};
+\end{axis}
+\end{tikzpicture}
+\caption{The same predictions, scored on 2,000 random resamples of the 58 gold studies (a \term{bootstrap}). The
+middle 90\,\% of the results spans \bootLo--\bootHi. A difference of 0.01 between two models on gold tells you almost
+nothing.}
+\label{fig:bootstrap}
+\end{figure}
+
+\begin{innumbers}
+\begin{itemize}
+\item 58 gold studies: macro AUC uncertain by about $\pm$0.02; a single finding by $\pm$0.05 to $\pm$0.09 (MCL has only
+      9 positives).
+\item Public leaderboard (\ca 390 studies): about $\pm$0.005.
+\item Out-of-fold predictions on 4,349 report-labelled studies: much more stable, but measured against
+      \emph{our own} labels, which have their own errors.
+\end{itemize}
+\end{innumbers}
+
+\begin{keyidea}
+Every score is measured against \emph{something}: the 58 gold labels (trustworthy but few), report labels (many
+but noisy) or the public leaderboard (hidden, limited submissions). Use them together and be suspicious of small
+differences. The winners spent real effort choosing their ruler (Chapter~\ref{ch:winmodels}).
+\end{keyidea}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can compute an AUC by counting pairs.
+\done I can draw a ROC curve from a sorted list.
+\done I know why a 0.01 gain on 58 gold studies is not evidence.
+\quiz Q6.1: A model outputs 0.51 for every sick study and 0.49 for every healthy one. What is its AUC?
+\quiz Q6.2: You add 0.3 to every prediction of one finding. What happens to the AUC?
+\quiz Q6.3: Which matters more for the final score: raising Baker's from 0.98 to 0.99, or Synovitis from 0.71 to
+      0.75?
+\end{itemize}
+\end{checkpoint}

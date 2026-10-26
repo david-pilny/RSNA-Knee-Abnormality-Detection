@@ -1,0 +1,130 @@
+\chapter{Step 4: the submission}
+\label{ch:submission}
+\whereami{5}
+
+\begin{tldr}
+\begin{itemize}
+\item The submission notebook runs \textbf{offline} on hidden data: everything it needs is attached as datasets.
+\item \textbf{Safety net first}: write a valid answer file before doing anything risky, then improve it.
+\item Each test study is prepared by the \textbf{same} \code{knee\_preproc.py}, predicted by every attached model
+      group (with mirror TTA), and the groups are \textbf{rank-blended}.
+\item To use a public notebook, we wrote a ``member cell'' that blends our ranks into its predictions.
+\end{itemize}
+\end{tldr}
+
+\section{The flow}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.9mm,y=1mm,
+  st/.style={draw=accent, fill=keyfill, rounded corners=1.5mm, minimum height=12mm, align=center,
+             font=\scriptsize, text width=24mm},
+  ar/.style={-{Stealth[length=1.8mm]}, line width=0.7pt, accent}]
+  \node[st, draw=wordline, fill=wordfill] (a) at (0,0) {\textbf{1. safety net}\\ write a valid\\ {\ttfamily\tiny submission.csv}};
+  \node[st] (b) at (30,0) {\textbf{2. offline installs}\\ JPEG decoders\\ from attached wheels};
+  \node[st] (c) at (60,0) {\textbf{3. load}\\ {\ttfamily\tiny knee\_preproc.py}\\ + model groups};
+  \node[st] (d) at (95,8) {\textbf{4a. prepare}\\ 32 studies\\ (4 CPU workers)};
+  \node[st] (e) at (95,-12) {\textbf{4b. predict}\\ every group,\\ normal + mirrored};
+  \node[st, draw=wordline, fill=wordfill] (f) at (130,-2) {\textbf{5. rewrite}\\ {\ttfamily\tiny submission.csv}\\ every few chunks};
+  \draw[ar] (a) -- (b); \draw[ar] (b) -- (c); \draw[ar] (c) -- (d.west);
+  \draw[ar] (d) -- (e); \draw[ar] (e.east) -- (f);
+  \draw[ar, dashed] (f.north) |- (d.east) node[pos=0.75, above, font=\scriptsize] {next chunk};
+\end{tikzpicture}
+\caption{The submission notebook. Steps 4a--5 repeat until all \ca 1,300 test studies are done or the time limit
+approaches.}
+\end{figure}
+
+\section{Safety net first}
+
+\begin{keyidea}
+A code competition punishes crashes harshly: a crash means no score, discovered hours later. So the first thing the
+notebook does is write a complete, valid answer file (one guess per finding, the training prevalence). Every study is
+then processed inside its own \code{try/except}; a study that fails keeps its guess, and the run goes on.
+\end{keyidea}
+
+\begin{watchout}
+Two of our runs of the public-notebook version failed only because a stray one-line cell (containing the text
+\code{[code]}, a paste accident) sat before our cell. A failed commit run means a failed scoring run, but you only
+learn that \ca 6 hours later. \textbf{Check the cell list before you submit.}
+\end{watchout}
+
+\section{Offline installs}
+
+Some sites store their DICOM pixels compressed (JPEG Lossless, JPEG 2000). Decoding them needs extra Python packages,
+and the scoring run has no internet. We downloaded the packages' installation files (\term{wheels}) once into a Kaggle
+dataset, \code{knee-dicom-wheels}, and the notebook installs them from there.
+
+\section{Model groups and rank blending}
+
+Every attached model dataset that contains a \code{train\_config.json} is one \term{group} (for example ``v5 B0'',
+``v5 ConvNeXt-Nano''). Within a group, the 5 fold models and the 2 views (normal + mirrored) are averaged. Between
+groups, predictions are combined \textbf{by rank}, per finding:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \matrix[matrix of nodes, nodes={font=\footnotesize, minimum width=17mm, minimum height=6mm, anchor=center},
+          column 1/.style={nodes={font=\footnotesize\bfseries}}, row 1/.style={nodes={font=\scriptsize\bfseries, text=muted}}] (m) {
+    study & model 1 & model 2 & \textcolor{muted}{prob.\ avg.} & rank 1 & rank 2 & \textbf{rank avg.} \\
+    A & 0.95 & 0.52 & 0.735 & 4 & 3 & \textbf{3.5} \\
+    B & 0.10 & 0.55 & 0.325 & 2 & 4 & \textbf{3.0} \\
+    C & 0.40 & 0.50 & 0.450 & 3 & 2 & \textbf{2.5} \\
+    D & 0.05 & 0.49 & 0.270 & 1 & 1 & \textbf{1.0} \\
+  };
+  \draw[grid] (m.north west) ++(0,-7) -- ++(119,0);
+  \node[font=\scriptsize, text=warnline, align=left, anchor=west] at (m.south west) [yshift=-6mm]
+    {probability average: order A, C, B, D = model 1's order; the cautious model 2 is ignored};
+  \node[font=\scriptsize, text=wordline, align=left, anchor=west] at (m.south west) [yshift=-11mm]
+    {rank average: order A, B, C, D; both models count equally};
+\end{tikzpicture}
+\caption{Why rank blending. Model 2 is cautious (all its predictions are close to 0.5), so averaging probabilities lets
+model 1 decide alone. Ranks put both on the same scale. Since AUC only cares about order, nothing is lost.}
+\label{fig:rankblend}
+\end{figure}
+
+\code{BLEND\_WEIGHTS} can give a group a different weight per finding (for example, weight 0 for the older v3 group on
+ACL, MCL and PF OA, where its labels were known to be bad).
+
+\section{Plugging into a public notebook: the ``member cell''}
+
+By early October the public leaderboard was crowded at \ca 0.94 by copies (\term{forks}) of one public notebook that
+ran several strong published models (Chapter~\ref{ch:experiments}). We forked it and added one cell of our own:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  cell/.style={draw=grid, fill=white, rounded corners=1mm, minimum width=36mm, minimum height=8mm, font=\scriptsize,
+               align=center},
+  ours/.style={cell, draw=us, fill=keyfill, line width=0.9pt}]
+  \node[cell] (c1) at (0,24) {public cells: their models};
+  \node[cell] (c2) at (0,12) {staged predictions (ranks)};
+  \node[ours, minimum height=14mm, text width=34mm] (c3) at (0,-3) {\textbf{our member cell}\\ back up $\cdot$ run our\\ models $\cdot$ blend ranks};
+  \node[cell] (c4) at (0,-19) {publish \code{submission.csv}};
+  \draw[-{Stealth}, muted] (c1) -- (c2); \draw[-{Stealth}, muted] (c2) -- (c3); \draw[-{Stealth}, muted] (c3) -- (c4);
+  \node[font=\scriptsize, align=left, anchor=west] at (24,6) {new rank $= (1-w)\cdot$ public rank $+\ w\cdot$ our rank\\[1mm]
+     $w$ = \code{OUR\_WEIGHT}, we tried 0, 0.25 and 0.4};
+  \node[font=\scriptsize, align=left, anchor=west, text=warnline] at (24,-6) {any error or time-out: restore the backup,\\
+     so the public result is never lost};
+\end{tikzpicture}
+\caption{The member cell sits just before the public notebook's final ``publish'' cell. It only touches the staged
+prediction file and restores it if anything goes wrong.}
+\label{fig:member}
+\end{figure}
+
+\begin{innumbers}
+\begin{itemize}
+\item A commit run of our own notebook (3 sample studies) took about 1--8 minutes, mostly loading models.
+\item Scoring a submission of the public notebook took \ca 6 hours before the result (or an error) appeared.
+\item Our member cell had a time limit (1.5--2 hours, or 20 minutes before the public notebook's own budget).
+\end{itemize}
+\end{innumbers}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can explain the safety-net pattern and why every study gets its own \code{try/except}.
+\done I can rank-blend two models by hand.
+\quiz Q10.1: Why must the test images be prepared with exactly the training cache's code?
+\quiz Q10.2: Two models disagree completely on one finding. What does the rank average look like?
+\quiz Q10.3: What does the member cell do if our models crash halfway?
+\end{itemize}
+\end{checkpoint}

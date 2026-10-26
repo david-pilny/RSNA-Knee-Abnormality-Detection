@@ -1,0 +1,242 @@
+\chapter{The data}
+\label{ch:data}
+\whereami{1}
+
+\begin{tldr}
+\begin{itemize}
+\item 4,407 training exams, 24,371 series, one \textbf{DICOM} file per slice. About 1,300 hidden test exams.
+\item Only \textbf{58} training exams have the 12 labels from doctors (``gold''). The other \textbf{4,349} have a
+      free-text \textbf{radiology report} in one of 12 languages, and no labels.
+\item The test exams have \textbf{images only}: no report.
+\item So the real first task is: \textbf{turn 4,349 reports into labels}, then train an image model on them.
+\end{itemize}
+\end{tldr}
+
+\section{Folders: study, series, slice}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm, every node/.style={font=\footnotesize}]
+  \node[anchor=west] at (0,0) {\faFolder\ \code{train\_series/}};
+  \draw[muted] (2,-2) -- (2,-26);
+  \draw[muted] (2,-6) -- (6,-6); \node[anchor=west] at (6,-6) {\faFolder\ \code{<StudyInstanceUID>/}};
+  \node[anchor=west, text=us] at (62,-6) {\faArrowLeft\ one \textbf{study} = one exam = one row of labels};
+  \draw[muted] (9,-8) -- (9,-24);
+  \draw[muted] (9,-12) -- (13,-12); \node[anchor=west] at (13,-12) {\faFolder\ \code{<SeriesInstanceUID>/}};
+  \node[anchor=west, text=us] at (62,-12) {\faArrowLeft\ one \textbf{series} = one 3D stack (e.g.\ sagittal PD fat-sat)};
+  \draw[muted] (16,-14) -- (16,-21);
+  \draw[muted] (16,-17) -- (20,-17); \node[anchor=west] at (20,-17) {\faFile\ \code{<SOPInstanceUID>.dcm}};
+  \node[anchor=west, text=us] at (62,-17) {\faArrowLeft\ one \textbf{slice} (one 2D image + header)};
+  \draw[muted] (16,-21) -- (20,-21); \node[anchor=west, text=muted] at (20,-21) {\ldots\ 20--40 more slices};
+  \draw[muted] (9,-24) -- (13,-24); \node[anchor=west, text=muted] at (13,-24) {\ldots\ \ca 5 more series};
+  \draw[muted] (2,-26) -- (6,-26); \node[anchor=west, text=muted] at (6,-26) {\ldots\ 4,406 more studies};
+\end{tikzpicture}
+\caption{The folder tree. The long numbers (UIDs) are random identifiers; they tell you nothing by themselves.
+The CSV files link them to labels and to series descriptions.}
+\end{figure}
+
+\section{One DICOM file}
+
+\term{DICOM} is the file format of medical imaging. A \code{.dcm} file has two parts:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \node[draw=grid, fill=white, rounded corners=1.5mm, minimum width=84mm, minimum height=44mm] (f) at (0,0) {};
+  \node[anchor=north west, font=\footnotesize\bfseries] at (-40,21) {header (``tags'')};
+  \node[anchor=north west, font=\scriptsize\ttfamily, align=left, text=ink] at (-40,16)
+    {Rows = 384, Columns = 384\\ PixelSpacing = 0.42 \textbackslash{} 0.42\\ SliceThickness = 3.5\\
+     ImagePositionPatient = ...\\ ImageOrientationPatient = ...\\ Laterality = R \textcolor{muted}{(often missing)}\\
+     \textcolor{muted}{... 86 allowed tags}};
+  \fill[dark!88] (16,-17) rectangle (38,13);
+  \fill[white!65!dark] (27,-2) circle (6.5);
+  \fill[dark!88] (27,-2) circle (4);
+  \node[font=\footnotesize\bfseries] at (27,17) {pixels};
+  \node[font=\scriptsize, text=muted] at (27,-20) {16-bit numbers};
+\end{tikzpicture}
+\caption{A DICOM file = a dictionary of metadata + the image. The header matters as much as the pixels: it
+says where the slice sits in the body, in millimetres.}
+\end{figure}
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{l>{\raggedright\arraybackslash}X}
+\toprule
+Tag & Why we need it \\
+\midrule
+\code{ImagePositionPatient} & 3D position of the slice's corner (mm). Sort slices by this, never by file name. \\
+\code{ImageOrientationPatient} & directions of the image rows and columns in the body. Tells the plane, and whether the image is flipped or rotated. \\
+\code{PixelSpacing}, \code{SliceThickness} & size of a pixel and of a slice in mm. Needed to resize every series to the same physical scale. \\
+\code{Laterality} & left or right knee. Missing in about half of the exams. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{watchout}
+The competition's files keep only 86 ``allowed'' header tags, and sites fill them inconsistently. Every tag can
+be missing; read them defensively.
+\end{watchout}
+
+\section{The tables}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  tbl/.style={draw=grid, fill=white, rounded corners=1mm, align=left, font=\scriptsize, inner sep=2mm, anchor=north west}]
+  \node[tbl, text width=44mm] at (0,0) {\textbf{train.csv}\\[1mm] one row per \textbf{study}\\
+     \code{StudyInstanceUID}\\ 12 label columns (filled for the 58 gold studies only)\\ the \textbf{report} (free text)};
+  \node[tbl, text width=44mm] at (52,0) {\textbf{train\_series.csv}\\[1mm] one row per \textbf{series}\\
+     \code{SeriesInstanceUID}\\ \code{Anatomical\_Plane}: Sagittal / Coronal / Axial\\ \code{Fluid\_Sensitive}: 0 / 1\\
+     \code{Fat\_Suppression}: 0 / 1};
+  \node[tbl, text width=44mm] at (104,0) {\textbf{test\_series.csv}\\[1mm] the same for the hidden test\\
+     series (only visible to the scoring run)\\[1mm] \textbf{sample\_submission.csv}\\ one row per test study,\\ 12 probability columns};
+\end{tikzpicture}
+\caption{The CSV files. \code{train\_series.csv} is precious: it already says which series is which, so we did
+not have to guess from the images.}
+\end{figure}
+
+\section{The numbers}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  big/.style={font=\fontsize{20}{22}\selectfont\bfseries, text=accentdark},
+  small/.style={font=\footnotesize, text=ink, align=center, text width=34mm}]
+  \foreach \x/\n/\t in {0/{4,407}/{training exams}, 40/{24,371}/{series (\ca 5.5 per exam)}, 80/{\ca 1,300}/{hidden test exams},
+                        120/12/{findings to predict}} {
+    \node[big] at (\x,8) {\n};
+    \node[small] at (\x,0) {\t};
+  }
+  \foreach \x/\n/\t/\c in {0/58/{exams with \textbf{doctor labels}}/them, 40/{4,349}/{exams with a \textbf{report} only}/us,
+                           80/12/{report languages}/ink, 120/977/{characters: median report length}/ink} {
+    \node[big, text=\c] at (\x,-16) {\n};
+    \node[small] at (\x,-24) {\t};
+  }
+\end{tikzpicture}
+\end{figure}
+
+\section{Who labelled what}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \foreach \i in {0,...,99} {
+    \pgfmathsetmacro{\c}{mod(\i,25)}
+    \pgfmathsetmacro{\r}{int(\i/25)}
+    \fill[us!75] ({\c*4.6},{-\r*4.6}) rectangle ++(4,4);
+  }
+  % 58 of 4,407 = 1.3 squares of 44 studies each
+  \fill[them] (0,0) rectangle ++(4,4);
+  \fill[them] (4.6,0) rectangle ++(1.3,4);
+  \draw[them, line width=0.8pt] (-1,5.2) -- (-1,6.5) -- (8,6.5) -- (8,5.2);
+  \node[anchor=south west, font=\footnotesize, text=them!85!black] at (-1,6.6) {\textbf{58 gold exams} (1.3\,\%)};
+  \node[anchor=west, font=\footnotesize, align=left] at (118,-6) {each square = 44 exams\\[1mm]
+     \textcolor{them}{\rule{3mm}{3mm}} labelled by doctors\\ \hspace*{4mm}from the \textbf{images}\\[1mm]
+     \textcolor{us!75}{\rule{3mm}{3mm}} only a \textbf{report}};
+\end{tikzpicture}
+\caption{The training set. Almost everything has to be learned from reports.}
+\label{fig:waffle}
+\end{figure}
+
+\paragraph{The 58 gold exams.} Two musculoskeletal radiologists read the \emph{images} independently, a third
+settled disagreements, and they applied the strict thresholds of Figure~\ref{fig:thresholds}. These are the only
+labels we can fully trust.
+
+\paragraph{The 4,349 report-only exams.} The report is what the hospital's radiologist wrote at the time,
+in their own language and style. It mentions what that radiologist thought worth mentioning, with their own
+severity words.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[xbar, width=11cm, height=6.2cm, bar width=2.6mm, xmin=0, xmax=1950,
+    symbolic y coords={Thai,Serbian,Bulgarian,French,Dutch,Russian,German,Greek,Croatian,Turkish,Spanish,English},
+    ytick=data, y tick label style={font=\footnotesize}, xtick=\empty, axis x line=none, axis y line*=left,
+    nodes near coords, nodes near coords style={font=\scriptsize, anchor=west}, enlarge y limits=0.06]
+  \addplot[barus] table[x=n, y=lang] {figdata/languages.dat};
+\end{axis}
+\end{tikzpicture}
+\caption{Report languages of the 4,349 report-only exams. Any labelling method has to read all of them.}
+\label{fig:languages}
+\end{figure}
+
+\begin{example}
+A made-up report for our imaginary \textbf{Study K} (real reports are longer, about 1,000 characters):
+\begin{quote}\small\itshape
+Complete rupture of the anterior cruciate ligament. Bone contusion of the lateral femoral condyle and the
+posterolateral tibial plateau. Moderate joint effusion. Menisci intact. Collateral ligaments intact.
+Cartilage preserved.
+\end{quote}
+A careful reader would turn this into: ACL \textbf{yes}, Contusion \textbf{yes}, Effusion \textbf{yes}
+(moderate), both menisci \textbf{no}, MCL \textbf{no}, all three OA \textbf{no}, and \ldots\ Synovitis, Baker's,
+Fracture: \textbf{not mentioned}. What do you do with ``not mentioned''? Chapter~\ref{ch:labels} answers that.
+\end{example}
+
+\section{How common is each finding?}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[ybar, width=\linewidth, height=6cm, bar width=3.2mm, ymin=0, ymax=70,
+    symbolic x coords={ACL,MCL,Med.~meniscus,Lat.~meniscus,Med.~OA,Lat.~OA,PF OA,Effusion,Synovitis,Baker's,Contusion,Fracture},
+    xtick=data, x tick label style={font=\scriptsize, rotate=35, anchor=north east}, ylabel={\% of exams positive},
+    ylabel style={font=\footnotesize}, ymajorgrids, legend style={at={(0.02,0.98)}, anchor=north west},
+    enlarge x limits=0.05]
+  \addplot[barthem] table[x=finding, y=gold] {figdata/prevalence.dat};
+  \addplot[barus] table[x=finding, y=pool] {figdata/prevalence.dat};
+  \legend{{58 gold exams (doctors)}, {4,349 report exams (our labels $>$ 0.5)}}
+\end{axis}
+\end{tikzpicture}
+\caption{Each finding is about three times more common in the gold set than in the report set. The organisers
+chose the gold exams to contain enough positives. Synovitis stands out: 47\,\% in gold, 10\,\% in our labels,
+because reports rarely mention it.}
+\label{fig:prevalence}
+\end{figure}
+
+\begin{watchout}
+Because the gold set is enriched, a model's \emph{average} probabilities on gold look ``too low'' even when the
+model is fine. AUC does not care (it only looks at order), but anything that relies on calibrated probabilities
+would.
+\end{watchout}
+
+\section{The test set has no reports}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  box/.style={draw=grid, rounded corners=1.5mm, minimum height=13mm, align=center, font=\footnotesize, fill=white}]
+  \node[font=\small\bfseries] at (-6,9) {training};
+  \node[box, minimum width=34mm] at (30,9) {\faImage\ images};
+  \node[box, minimum width=34mm, draw=us, line width=0.8pt] at (70,9) {\faFile\ report};
+  \node[box, minimum width=34mm] at (110,9) {\faTag\ labels (58 only)};
+  \node[font=\small\bfseries] at (-6,-9) {test};
+  \node[box, minimum width=34mm] at (30,-9) {\faImage\ images};
+  \node[box, minimum width=34mm, dashed, text=muted] at (70,-9) {no report};
+  \node[box, minimum width=34mm, dashed, text=muted] at (110,-9) {no labels};
+\end{tikzpicture}
+\caption{At test time only the images exist. The report can teach the model during training, but the model has
+to work from images alone.}
+\end{figure}
+
+\begin{keyidea}
+Every solution in this competition has the same two steps:
+\textbf{(1)} turn the reports (and maybe the images) of the 4,349 exams into labels;
+\textbf{(2)} train an image model on those labels.
+The image model can never be much better than its labels. Chapter~\ref{ch:labels} is step 1, Chapters
+\ref{ch:cache}--\ref{ch:model} are step 2.
+\end{keyidea}
+
+\begin{wordcheck}
+\term{Weak supervision}: training on labels that are cheaper but noisier than the real thing (here: labels read
+from reports instead of doctors' image labels). \term{Gold labels}: the trusted reference labels (here: the 58).
+\end{wordcheck}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can describe the path from a folder of \code{.dcm} files to one study with its series.
+\done I know which exams have labels, which have reports, and what the test set has.
+\quiz Q4.1: Why sort slices by \code{ImagePositionPatient} rather than by file name?
+\quiz Q4.2: Our labels say 11\,\% of exams have an ACL tear, the gold set says 41\,\%. Does that mean our labels
+      are wrong?
+\quiz Q4.3: Why can't the model simply read the report at test time?
+\end{itemize}
+\end{checkpoint}

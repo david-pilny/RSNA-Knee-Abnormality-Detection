@@ -1,0 +1,114 @@
+\chapter*{How to read this script}
+\addcontentsline{toc}{chapter}{How to read this script}
+\markboth{How to read this script}{How to read this script}
+
+This script is for someone who knows how to program but is new to medical imaging, to Kaggle competitions,
+or to both. It follows one competition from start to finish: what the data looks like, which ideas we tried
+and why, what each one scored, and what the team that finished first did.
+
+\textbf{You do not need to read it in order.} Every chapter starts with a one-minute summary and ends with a
+checkpoint. The pictures carry most of the story.
+
+\section*{The boxes}
+
+The text is broken up by coloured boxes. Each box has an icon and a word, so the meaning survives a
+black-and-white printer.
+
+\begin{tldr}
+Three to five bullets at the start of every chapter. If you only read these, you get the whole story.
+\end{tldr}
+\begin{keyidea}
+The one sentence to remember from a section.
+\end{keyidea}
+\begin{why}
+The reason behind a choice. Read these when something feels arbitrary.
+\end{why}
+\begin{wordcheck}
+A new word, explained in plain language the first time it appears. All of them are collected in the glossary
+(Appendix~\ref{app:glossary}).
+\end{wordcheck}
+\begin{watchout}
+A mistake that is easy to make, often one we made ourselves.
+\end{watchout}
+\begin{innumbers}
+The figures that matter, in one place.
+\end{innumbers}
+\begin{example}
+A small worked example, usually about one imaginary knee called \textbf{Study K}.
+\end{example}
+\begin{checkpoint}
+\begin{itemize}
+\done A short list of what you should now be able to explain.
+\quiz Two or three questions to test yourself. The answers are in Appendix~\ref{app:answers}.
+\end{itemize}
+\end{checkpoint}
+
+\section*{Three ways through}
+
+\begin{center}
+\begin{tikzpicture}[x=0.9mm,y=1mm,
+  route/.style={draw=#1, line width=0.8pt, rounded corners=2mm, fill=white, minimum height=10mm,
+                text width=34mm, align=center, font=\small},
+  lab/.style={font=\small\bfseries, anchor=east}]
+  \node[lab] at (-2,20) {\faStopwatch\ 15 minutes};
+  \node[route=tldrline] at (24,20) {every \textbf{In one minute} box};
+  \node[route=tldrline] at (70,20) {every \textbf{Checkpoint}};
+  \node[route=tldrline] at (116,20) {Chapter~\ref{ch:usvsthem}: us vs.\ them};
+  \node[lab] at (-2,6) {\faCoffee\ one hour};
+  \node[route=keyline] at (24,6) {Part~I: the problem};
+  \node[route=keyline] at (70,6) {Chapter~\ref{ch:experiments}: our experiments};
+  \node[route=keyline] at (116,6) {Part~IV: the winners};
+  \node[lab] at (-2,-8) {\faBook\ properly};
+  \node[route=wordline, text width=118mm] at (70,-8) {front to back; Part~II explains the machine learning that Parts~III and IV use};
+  \foreach \y in {20,6} {\draw[-{Stealth}, muted] (46.5,\y) -- (47.5,\y); \draw[-{Stealth}, muted] (92.5,\y) -- (93.5,\y);}
+\end{tikzpicture}
+\end{center}
+
+\section*{The whole story on one page}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  stage/.style={draw=grid, fill=white, rounded corners=1.5mm, text width=29mm, minimum height=21mm,
+                align=center, font=\footnotesize, inner sep=2pt},
+  head/.style={font=\footnotesize\sffamily\bfseries, text=muted},
+  ar/.style={-{Stealth[length=2mm]}, line width=0.8pt}]
+  % column heads
+  \foreach \x/\t in {0/{\faFile\ 1. Labels}, 33/{\faLayerGroup\ 2. Images in}, 66/{\faBrain\ 3. Model}, 99/{\faTrophy\ 4. Score}}
+    \node[head] at (\x,17) {\t};
+  % our lane
+  \node[font=\small\bfseries, text=us, rotate=90] at (-21,0) {Us};
+  \node[stage, draw=us, line width=0.8pt] (u1) at (0,0) {an open model reads the \textbf{report text}\\[1pt] agrees with doctors\\ \textbf{0.879} AUC};
+  \node[stage, draw=us, line width=0.8pt] (u2) at (33,0) {3 series,\\ 24 slices each,\\ 256\,px, whole knee};
+  \node[stage, draw=us, line width=0.8pt] (u3) at (66,0) {small CNNs\\ (EfficientNet-B0,\\ ConvNeXt-Nano)};
+  \node[stage, draw=us, line width=0.8pt] (u4) at (99,0) {own model 0.918 public\\ best entry \textbf{0.927} private\\ rank 2,968 / 6,425};
+  % winners lane
+  \node[font=\small\bfseries, text=them, rotate=90] at (-21,-26) {Winners};
+  \node[stage, draw=them, line width=0.8pt] (w1) at (0,-26) {AI agents read the \textbf{report and the images}\\[1pt] \textbf{0.94} AUC};
+  \node[stage, draw=them, line width=0.8pt] (w2) at (33,-26) {5 series, all slices,\\ 384--512\,px,\\ + \textbf{anatomy boxes}};
+  \node[stage, draw=them, line width=0.8pt] (w3) at (66,-26) {larger CNNs that\\ \textbf{look inside the boxes}};
+  \node[stage, draw=them, line width=0.8pt] (w4) at (99,-26) {\textbf{0.960} private\\ rank 1\\ (one model: 0.954)};
+  \foreach \a/\b in {u1/u2,u2/u3,u3/u4} \draw[ar, us] (\a) -- (\b);
+  \foreach \a/\b in {w1/w2,w2/w3,w3/w4} \draw[ar, them] (\a) -- (\b);
+  % the biggest gap
+  \draw[decorate, decoration={brace, amplitude=2mm, mirror}, line width=0.7pt, ink]
+     (-15,-38.5) -- (15,-38.5) node[midway, below=3mm, font=\footnotesize, text width=40mm, align=center]
+     {\textbf{the biggest gap:} better labels};
+\end{tikzpicture}
+\caption{Our pipeline and the winners' pipeline, side by side. Both have the same four parts. The largest
+difference is in the first one: how good the training labels are.}
+\label{fig:story}
+\end{figure}
+
+\paragraph{The story in six sentences.}
+\begin{enumerate}
+\item The task: look at one knee MRI exam and give a probability for each of 12 problems (a torn ligament,
+      a torn meniscus, fluid in the joint, \ldots).
+\item Only 58 of the 4,407 training exams were labelled by doctors; the rest only have a free-text report.
+\item So everybody first had to \textbf{turn reports into labels}, and then train an image model on those labels.
+\item We did this with an open language model that read the reports, and trained small image models: 0.918 on
+      our own, 0.927 on the final leaderboard with the help of a public notebook.
+\item The winners let AI agents read the reports \emph{and look at the images}, and also asked them to draw boxes
+      around the anatomy; their models scored 0.960.
+\item Most of the gap comes from the labels, a smaller part from telling the model where to look.
+\end{enumerate}

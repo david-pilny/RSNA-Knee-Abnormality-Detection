@@ -1,0 +1,46 @@
+\chapter{Image credits and sources}
+\label{app:credits}
+
+\small
+
+\section*{MRI images (Wikimedia Commons)}
+
+The real MRI images are from Wikimedia Commons and are used under their Creative Commons licences. Arrows and labels were
+added to the two sagittal images in Figure~\ref{fig:t1pd}; otherwise they are only scaled.
+
+\begin{center}
+\begin{tabularx}{\linewidth}{l>{\raggedright\arraybackslash}X l l}
+\toprule
+Used in & File on Wikimedia Commons & Author & Licence \\
+\midrule
+Fig.~\ref{fig:realplanes}, \ref{fig:t1pd} & Knee MRI PD TSE FS Sagittal.jpg & Ptrump16 & CC BY-SA 4.0 \\
+Fig.~\ref{fig:t1pd} & Knee MRI T1 TSE Sagittal.jpg & Ptrump16 & CC BY-SA 4.0 \\
+Fig.~\ref{fig:realplanes} & Knee Cor 140234 t2me2d.png & Nevit Dilmen & CC BY-SA 3.0 \\
+Fig.~\ref{fig:realplanes} & Knee MRI 135826 pdfs.png & Nevit Dilmen & CC BY-SA 3.0 \\
+Fig.~\ref{fig:realfindings} & MRT VKB-Riss PDW.jpg & Hellerhoff & CC BY-SA 3.0 \\
+Fig.~\ref{fig:realfindings} & MRI meniscus tear.jpg & Ciernik M & CC BY-SA 4.0 \\
+Fig.~\ref{fig:realfindings} & Bakerzyste MRT ax.jpg & Hellerhoff & CC BY-SA 3.0 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+Each file's page: \url{https://commons.wikimedia.org/wiki/File:} followed by the file name (spaces as underscores).
+Licences: \url{https://creativecommons.org/licenses/by-sa/4.0/} and \url{https://creativecommons.org/licenses/by-sa/3.0/}.
+
+\section*{Drawings and charts}
+
+All knee drawings, diagrams and charts were made for this script. Charts of our own results use only numbers (labels,
+probabilities, predictions) from the project's \code{data/} folder, produced by \path{docs/script/make_figure_data.py};
+no report text was used. Study~K and its report are invented.
+
+\section*{Sources}
+
+\begin{itemize}
+\item tascj and sakaku, \emph{1st Place Solution}, Kaggle competition write-up, 25 Oct 2026.
+      \url{https://www.kaggle.com/competitions/rsna-knee-abnormality-detection/writeups/1st-place-solution}
+\item sakaku, \emph{1st place solution: Better labels, anatomy-aware MRI models}, Kaggle discussion 752474, Oct 2026.
+\item Competition host, \emph{Use of Commercially Hosted LLMs}, pinned Kaggle discussion 733965.
+\item Kaggle leaderboard of \emph{RSNA Knee Abnormality Detection}, read on 25 Oct 2026 (private leaderboard, preliminary).
+\item Our project: notebooks, analysis and notes in the GitHub repository \path{david-pilny/RSNA-Knee-Abnormality-Detection}
+      (\code{CLAUDE.md} holds every number quoted here for our pipeline).
+\item The public notebook we forked: \path{mattiaangeli/bend-the-knee-to-speedy-raptors-the-original} on Kaggle.
+\end{itemize}

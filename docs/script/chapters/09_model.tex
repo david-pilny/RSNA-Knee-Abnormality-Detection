@@ -1,0 +1,211 @@
+\chapter{Step 3: the model}
+\label{ch:model}
+\whereami{4}
+
+\begin{tldr}
+\begin{itemize}
+\item Our model (\code{KneeNet}): each of the 3 series gives \textbf{8 slice triplets}; one shared \textbf{EfficientNet-B0}
+      turns each triplet into a feature vector; \textbf{attention pooling} makes one vector per series; a small
+      \textbf{MLP} turns the three vectors into 12 outputs.
+\item Trained on \textbf{soft labels} with a masked BCE loss, \textbf{10 epochs}, about \textbf{44 minutes per fold} on one T4.
+\item Kaggle's GPUs taught us three hard rules: \textbf{T4 not P100}, \textbf{one GPU per process}, \textbf{fp16 not bf16}.
+\end{itemize}
+\end{tldr}
+
+\section{The architecture}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.86mm,y=1mm,
+  lab/.style={font=\scriptsize, align=center},
+  ar/.style={-{Stealth[length=1.6mm]}, line width=0.6pt, muted}]
+  % three series
+  \foreach \r/\name/\y in {0/sag/22, 1/cor/0, 2/ax/-22} {
+    \foreach \k in {0,...,4} \fill[dark!85, draw=white, line width=0.3pt] ({\k*1},{\y-6+\k*0.8}) rectangle ++(10,10);
+    \node[lab, anchor=east] at (-1.5,\y) {\code{\name\_fs}\\ 24 slices};
+    % triplets
+    \foreach \t in {0,...,7} {
+      \fill[red!60] ({21+\t*4.2},{\y-3}) rectangle ++(3.2,6);
+      \fill[green!50!black!60] ({21.4+\t*4.2},{\y-3.4}) rectangle ++(3.2,6);
+      \fill[blue!60] ({21.8+\t*4.2},{\y-3.8}) rectangle ++(3.2,6);
+    }
+    \draw[ar] (16,\y) -- (20,\y);
+    % backbone
+    \draw[ar] (56,\y) -- (60,\y);
+    % features
+    \foreach \t in {0,...,7} \fill[us!70] ({80+\t*1.6},{\y-4}) rectangle ++(1.2,8);
+    \draw[ar] (76,\y) -- (79,\y);
+    % attention pool -> one vector
+    \node[draw=us, fill=keyfill, rounded corners=1mm, lab, minimum width=13mm, minimum height=8mm] (ap\r) at (102,\y) {attention\\ pool};
+    \draw[ar] (93,\y) -- (ap\r.west);
+    \fill[us] (113,{\y-4}) rectangle ++(2,8);
+    \draw[ar] (ap\r.east) -- (112.5,\y);
+    \node[lab, anchor=west] at (116,\y) {+ role\\ embedding};
+  }
+  \node[draw=accent, fill=keyfill, rounded corners=2mm, minimum width=15mm, minimum height=60mm, lab] (bb) at (68,0)
+       {\textbf{shared}\\ \textbf{EfficientNet-B0}\\[1mm] same weights\\ for all\\ 24 images};
+  \node[lab] at (36,34) {8 triplets per series\\ (3 slices = R, G, B)};
+  \node[lab] at (86,34) {8 feature vectors\\ (1,280 numbers each)};
+  % concat and head
+  \node[draw=them, fill=whyfill, rounded corners=1.5mm, lab, minimum width=19mm, minimum height=14mm] (head) at (156,0)
+       {concatenate\\ + MLP head};
+  \foreach \y in {22,0,-22} \draw[ar] (132,\y) -- (head.west);
+  \foreach \k in {0,...,11} \fill[them!80] ({151+\k*0.9},-14) rectangle ++(0.7,3);
+  \node[lab] at (156,-18) {12 logits};
+  \draw[ar] (head) -- (156,-10.5);
+\end{tikzpicture}
+\caption{\code{KneeNet}. 3 series $\times$ 8 triplets = 24 images per study go through the same backbone; pooling and the
+head then reduce them to 12 numbers. With a batch of 8 studies, the backbone sees 192 images per step.}
+\label{fig:kneenet}
+\end{figure}
+
+\subsection*{Slice triplets}
+
+From the 24 cached slices we pick 8 evenly spaced centres (slice 1, 4, 7, \ldots, 22). Each centre plus its two
+neighbours becomes one 3-channel image, exactly the shape an ImageNet backbone expects (Figure~\ref{fig:25d}).
+During training every centre moves by $-1$, 0 or $+1$ at random, a cheap form of augmentation.
+
+\subsection*{Attention pooling, role embedding, mask}
+
+\begin{itemize}
+\item \textbf{Attention pooling} (Figure~\ref{fig:attnpool}): a two-layer mini-network scores each of the 8 triplet
+      features; the softmax of the scores gives the weights; the weighted sum is the series feature.
+\item \textbf{Role embedding}: a learned vector added to the series feature, so the head knows which feature came
+      from which plane.
+\item \textbf{Role mask}: if a series is missing, its feature is set to zero and a 0/1 flag tells the head. (In
+      practice all three were almost always present.)
+\end{itemize}
+
+\subsection*{The head}
+
+\begin{center}\small
+\code{Dropout(0.3) $\rightarrow$ Linear(3$\times$1280 + 3 $\rightarrow$ 512) $\rightarrow$ GELU $\rightarrow$ Dropout(0.2) $\rightarrow$ Linear(512 $\rightarrow$ 12)}
+\end{center}
+\term{Dropout} switches off a random share of the numbers during training, another defence against
+memorising.
+
+\section{Loss and labels}
+
+\begin{itemize}
+\item Targets: the v4 soft labels (Chapter~\ref{ch:labels}), one value between 0 and 1 per finding.
+\item Loss: binary cross-entropy on soft labels, with missing labels masked out (Figure~\ref{fig:bce}).
+\item The \textbf{58 gold studies are never trained on}. They are predicted by the 5 fold models together and used
+      only as an outside check.
+\end{itemize}
+
+\section{Augmentation, on the GPU}
+
+All augmentation runs on the GPU, per series, so the CPU never slows training down:
+\begin{itemize}
+\item small rotation ($\pm$10\textdegree), zoom ($\pm$10\,\%) and shift ($\pm$5\,\%);
+\item brightness, contrast and gamma changes;
+\item \textbf{joint knee mirror}, with probability 0.5:
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \node[font=\footnotesize\bfseries] at (20,30) {original knee};
+  \node[font=\footnotesize\bfseries] at (95,30) {mirrored knee (all three together)};
+  \foreach \x/\m in {0/0, 75/1} {
+    % sagittal: slice order
+    \foreach \k in {0,...,5} {
+      \pgfmathsetmacro{\g}{\m==0 ? 30+\k*10 : 80-\k*10}
+      \fill[dark!\g] ({\x+\k*4},14) rectangle ++(3,10);
+    }
+    \node[font=\scriptsize, anchor=west] at ({\x+26},19) {sagittal: slice order};
+    % coronal and axial: left-right flip
+    \fill[dark!80] (\x,0) rectangle ++(22,10);
+    \fill[them] ({\x+(\m==0 ? 3 : 15)},3) rectangle ++(4,4);
+    \node[font=\scriptsize, anchor=west] at ({\x+26},5) {coronal + axial: left $\leftrightarrow$ right};
+  }
+  \draw[-{Stealth}, line width=1pt, muted] (58,12) -- (70,12);
+\end{tikzpicture}
+\caption{A mirrored knee looks like the other leg. Sagittal slices are reversed in order; coronal and axial images
+are flipped. Doing it to only one series would create an impossible knee.}
+\label{fig:mirror}
+\end{figure}
+
+\begin{why}
+Mirroring makes the model see twice as many ``different'' knees. The price: the model can no longer tell a left
+knee from a right one, and therefore medial from lateral by position alone. We tested whether that hurt in
+Chapter~\ref{ch:experiments} (it did not).
+\end{why}
+
+\section{Training settings}
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{l>{\raggedright\arraybackslash}X}
+\toprule
+Backbone & EfficientNet-B0, ImageNet-pretrained (later also ConvNeXt-Nano) \\
+Optimizer & AdamW, learning rate $3\cdot10^{-4}$, weight decay $10^{-2}$ \\
+Schedule & 1 warm-up epoch, then cosine decay; 10 epochs \\
+Batch & 8 studies = 192 triplet images \\
+Precision & fp16 mixed precision, \code{channels\_last} memory layout \\
+Data loading & 224\,px: whole cache preloaded into RAM (15.9\,GB of \ca 32\,GB); 256\,px: unpacked once to local disk and memory-mapped \\
+Validation & 5-fold GroupKFold by site (31 groups); mirror TTA \\
+Speed (one T4) & 224\,px: 0.41\,s/step, 33\,min/fold. 256\,px: 0.53\,s/step, 44\,min/fold \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \draw[muted] (0,0) -- (120,0);
+  \foreach \t in {0,30,60,90,120} {\draw[muted] (\t,-1) -- (\t,1); \node[font=\scriptsize, below] at (\t,-1) {\pgfmathparse{int(\t)}\pgfmathresult\ min};}
+  \node[font=\scriptsize, anchor=east] at (-2,14) {GPU 1};
+  \node[font=\scriptsize, anchor=east] at (-2,6) {GPU 2};
+  \fill[us!70] (0,11.5) rectangle (44,16.5); \node[font=\scriptsize, text=white] at (22,14) {B0 fold 0};
+  \fill[us!70] (45,11.5) rectangle (89,16.5); \node[font=\scriptsize, text=white] at (67,14) {B0 fold 1};
+  \fill[them!80] (0,3.5) rectangle (62,8.5); \node[font=\scriptsize, text=white] at (31,6) {ConvNeXt-Nano fold 0};
+  \fill[them!80] (63,3.5) rectangle (125,8.5); \node[font=\scriptsize, text=white] at (94,6) {ConvNeXt-Nano fold 1};
+\end{tikzpicture}
+\caption{Our training notebook ran \emph{jobs} as separate processes, one per GPU, so both T4s were busy.}
+\end{figure}
+
+\section{Three hard rules from Kaggle's GPUs}
+
+\begin{watchout}
+\begin{enumerate}
+\item \textbf{Use the T4, not the P100.} Current PyTorch no longer ships code for the P100's older architecture.
+\item \textbf{One GPU per process, no \code{nn.DataParallel}.} Splitting batches across two T4s made a step 18$\times$
+      slower (7.5\,s instead of 0.4\,s) and crashed the kernel. A 5-minute speed diagnostic found it after two blind
+      fixes had failed. \textbf{Measure before fixing.}
+\item \textbf{fp16, not bf16.} The T4 has no fast bf16 hardware; bf16 ran about 3$\times$ slower.
+\end{enumerate}
+\end{watchout}
+
+\begin{innumbers}
+Kaggle gives about 30 GPU hours per week and kills sessions after 12 hours (a killed run saves nothing). One
+5-fold training run of B0 at 256\,px costs about 3.7 GPU hours. The budget, not ideas, set the pace of the project.
+\end{innumbers}
+
+\section{First results of the 256\,px model}
+
+\begin{center}\small
+\begin{tabular}{lccc}
+\toprule
+Fold 0, 256\,px, 140\,mm crop & validation AUC (903 studies) & gold AUC (58) & time per fold \\
+\midrule
+EfficientNet-B0 & 0.861 & 0.886 & 44 min \\
+ConvNeXt-Nano & 0.857 & 0.898 & 62 min \\
+rank average of the two & -- & \textbf{0.903} & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Validation AUC compares with our own report labels (rounded at 0.5), gold AUC with the doctors. They disagree about
+which backbone is better: with this much noise (Figure~\ref{fig:bootstrap}) neither number alone decides.
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can draw \code{KneeNet} from series to 12 outputs.
+\done I know why mirroring must flip all three series together.
+\done I know the three GPU rules and why they exist.
+\quiz Q9.1: How many images does the backbone process for one batch of 8 studies?
+\quiz Q9.2: Why is the gold set predicted by all 5 fold models, while each training study gets one out-of-fold
+      prediction?
+\quiz Q9.3: B0 is better on validation, ConvNeXt-Nano on gold. Which would you keep?
+\end{itemize}
+\end{checkpoint}

@@ -1,0 +1,150 @@
+% ---------------------------------------------------------------------------
+% Preamble for the RSNA knee script. Compiled with Tectonic (XeTeX engine).
+% ---------------------------------------------------------------------------
+\usepackage{fontspec}                 % Latin Modern = the classic LaTeX look
+\usepackage[english]{babel}
+\usepackage[protrusion=true]{microtype}
+\usepackage[a4paper,top=24mm,bottom=26mm,inner=27mm,outer=23mm,headheight=14pt]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[dvipsnames,table]{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric,shapes.misc,
+  decorations.pathreplacing,patterns,matrix,shadows.blur}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{groupplots,fillbetween,colormaps}
+\usepackage[most]{tcolorbox}
+\usepackage{booktabs,tabularx,array,multirow,makecell}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{fontawesome5}
+\usepackage[font=small,labelfont=bf,margin=4mm]{caption}
+\usepackage{subcaption}
+\usepackage{wrapfig}
+\usepackage{float}
+\usepackage{multicol}
+\usepackage{pifont}
+\usepackage{xspace}
+\usepackage{xurl}
+\usepackage[colorlinks=true,linkcolor=accentdark,urlcolor=accentdark,citecolor=accentdark]{hyperref}
+
+\setlength{\parindent}{0pt}
+\setlength{\emergencystretch}{2.5em}
+\setlength{\parskip}{0.55em}
+\linespread{1.06}
+\setlist{itemsep=0.15em,topsep=0.3em}
+\renewcommand{\arraystretch}{1.18}
+
+% ---------------------------------------------------------------- colours
+% Chart colours: first three slots of a colour-blind-checked palette.
+\definecolor{us}{HTML}{2A78D6}        % our pipeline (blue)
+\definecolor{them}{HTML}{EB6834}      % the winners (orange)
+\definecolor{third}{HTML}{1BAF7A}     % a third series (aqua)
+\definecolor{ink}{HTML}{1F1F1D}
+\definecolor{muted}{HTML}{6B6A66}
+\definecolor{grid}{HTML}{DDDCD8}
+\definecolor{accent}{HTML}{2A78D6}
+\definecolor{accentdark}{HTML}{1C5CAB}
+% Box tints (light, so they print well; every box also carries an icon and a word)
+\definecolor{keyfill}{HTML}{E8F1FC}  \definecolor{keyline}{HTML}{2A78D6}
+\definecolor{whyfill}{HTML}{FFF4DC}  \definecolor{whyline}{HTML}{C98500}
+\definecolor{wordfill}{HTML}{E6F6EF} \definecolor{wordline}{HTML}{14855C}
+\definecolor{warnfill}{HTML}{FCE9E8} \definecolor{warnline}{HTML}{D03B3B}
+\definecolor{numfill}{HTML}{F1F0EC}  \definecolor{numline}{HTML}{6B6A66}
+\definecolor{tldrfill}{HTML}{F3EFFC} \definecolor{tldrline}{HTML}{6250D6}
+% MRI-ish greys for drawings
+\definecolor{bone}{HTML}{8C8C8C}
+\definecolor{marrow}{HTML}{B5B5B5}
+\definecolor{fluid}{HTML}{F5F5F5}
+\definecolor{dark}{HTML}{202020}
+\definecolor{softtissue}{HTML}{5E5E5E}
+
+% ---------------------------------------------------------------- boxes
+\tcbset{
+  base/.style={enhanced, boxrule=0pt, leftrule=2.2mm, arc=1.2mm, outer arc=1.2mm,
+    left=3mm, right=3mm, top=1.6mm, bottom=1.6mm, before skip=0.9em, after skip=0.9em,
+    fonttitle=\bfseries\small, coltitle=ink, attach title to upper={\ \ }, parbox=false},
+}
+% Each box: colour + icon + word, so the meaning survives black-and-white printing.
+\newtcolorbox{keyidea}[1][]{base, colback=keyfill, colframe=keyline,
+  title={\textcolor{keyline}{\faLightbulb[regular]}\ Key idea#1}}
+\newtcolorbox{why}[1][]{base, colback=whyfill, colframe=whyline,
+  title={\textcolor{whyline}{\faQuestionCircle[regular]}\ Why?#1}}
+\newtcolorbox{wordcheck}[1][]{base, colback=wordfill, colframe=wordline,
+  title={\textcolor{wordline}{\faBookOpen}\ Word check#1}}
+\newtcolorbox{watchout}[1][]{base, colback=warnfill, colframe=warnline,
+  title={\textcolor{warnline}{\faExclamationTriangle}\ Watch out#1}}
+\newtcolorbox{innumbers}[1][]{base, colback=numfill, colframe=numline,
+  title={\textcolor{numline}{\faCalculator}\ In numbers#1}}
+\newtcolorbox{example}[1][]{base, colback=white, colframe=numline, leftrule=0.6mm, boxrule=0.4pt,
+  title={\textcolor{numline}{\faSearch}\ Example#1}}
+\newtcolorbox{tldr}{enhanced, colback=tldrfill, colframe=tldrline, boxrule=0.6pt, arc=1.5mm,
+  left=3.5mm, right=3.5mm, top=2mm, bottom=2mm, before skip=0.4em, after skip=1.1em,
+  title={\faStopwatch\ \ In one minute}, fonttitle=\bfseries, coltitle=white, colbacktitle=tldrline}
+\newtcolorbox{checkpoint}{enhanced, colback=white, colframe=tldrline, boxrule=0.6pt, arc=1.5mm,
+  left=3.5mm, right=3.5mm, top=2mm, bottom=2mm, before skip=1.2em,
+  title={\faFlagCheckered\ \ Checkpoint}, fonttitle=\bfseries, coltitle=white, colbacktitle=tldrline}
+
+% Checklist and question items inside a checkpoint
+\newcommand{\done}{\item[\textcolor{tldrline}{\faCheckSquare[regular]}]}
+\newcommand{\quiz}{\item[\textcolor{tldrline}{\faQuestion}]}
+
+% ---------------------------------------------------------------- small helpers
+\newcommand{\term}[1]{\textbf{#1}}
+\newcommand{\ca}{\ensuremath{\sim}}           % "about" sign                 % a new word, defined right here
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\finding}[1]{\textsf{#1}}
+\newcommand{\us}{\textcolor{us}{\textbf{us}}\xspace}
+\newcommand{\them}{\textcolor{them}{\textbf{winners}}\xspace}
+\newcommand{\aucv}[1]{\textbf{#1}}
+\newcommand{\up}{\textcolor{third}{\ding{115}}}    % small up-triangle
+\newcommand{\down}{\textcolor{warnline}{\ding{116}}}
+\newcommand{\cmark}{\textcolor{wordline}{\ding{51}}}
+\newcommand{\xmark}{\textcolor{warnline}{\ding{55}}}
+\newcommand{\figsrc}[1]{\par\vspace{-0.4em}{\scriptsize\textcolor{muted}{#1}}}
+
+% ---------------------------------------------------------------- "where are we?" strip
+% \whereami{k}: draws the pipeline and highlights stage k (0 = none).
+\newcommand{\whereami}[1]{%
+  \begin{center}
+  \begin{tikzpicture}[x=1mm,y=1mm,
+      st/.style={draw=grid, fill=white, rounded corners=1.2mm, minimum height=7mm, minimum width=21mm,
+                 font=\scriptsize\sffamily, text=muted, inner sep=1pt, align=center},
+      on/.style={draw=accent, fill=keyfill, text=ink, font=\scriptsize\sffamily\bfseries, line width=0.8pt},
+      ar/.style={-{Stealth[length=1.6mm]}, draw=grid, line width=0.7pt}]
+    \foreach \i/\t in {1/{\faDatabase\\Data}, 2/{\faFile\\Labels}, 3/{\faLayerGroup\\Image cache},
+                       4/{\faBrain\\Model}, 5/{\faPaperPlane\\Submission}, 6/{\faTrophy\\Leaderboard}} {
+      \ifnum\i=#1
+        \node[st,on] (s\i) at ({(\i-1)*26},0) {\t};
+      \else
+        \node[st] (s\i) at ({(\i-1)*26},0) {\t};
+      \fi
+    }
+    \foreach \i [evaluate=\i as \j using int(\i+1)] in {1,...,5} { \draw[ar] (s\i) -- (s\j); }
+    \node[font=\scriptsize\itshape, text=muted, anchor=south west, inner sep=0pt] at ([yshift=1mm]s1.north west) {where are we?};
+  \end{tikzpicture}
+  \end{center}\vspace{-0.6em}}
+
+% ---------------------------------------------------------------- chapter titles (classic look, less empty space)
+\usepackage{titlesec}
+\titleformat{\chapter}[display]{\normalfont\huge\bfseries}{\chaptertitlename\ \thechapter}{10pt}{\Huge}
+\titlespacing*{\chapter}{0pt}{-12pt}{22pt}
+
+% ---------------------------------------------------------------- headers
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE]{\small\textsc{\leftmark}}
+\fancyhead[RO]{\small\textsc{\rightmark}}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+% ---------------------------------------------------------------- pgfplots defaults
+\pgfplotsset{
+  every axis/.append style={font=\small, axis line style={draw=muted}, tick style={draw=muted},
+    major grid style={draw=grid, line width=0.3pt}, label style={text=ink}, tick label style={text=ink},
+    legend style={draw=none, fill=none, font=\footnotesize}, legend cell align=left},
+  barus/.style={fill=us, draw=white, line width=0.6pt},
+  barthem/.style={fill=them, draw=white, line width=0.6pt},
+  barthird/.style={fill=third, draw=white, line width=0.6pt},
+}

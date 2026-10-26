@@ -1,0 +1,287 @@
+\chapter[The winners, part 2: models]{The winners, part 2:\\ models that know where to look}
+\label{ch:winmodels}
+
+\begin{tldr}
+\begin{itemize}
+\item Agents also drew \textbf{boxes}: around the \emph{anatomy} each finding concerns, and around visible
+      \emph{lesions}. A detector learned to draw the anatomy boxes on every series.
+\item \textbf{Box pooling}: each finding reads the image features only inside its own box, so ``lateral meniscus'' looks
+      at the lateral meniscus.
+\item Training-only extras: a \textbf{lesion head} and a \textbf{report head} (predict the report's meaning from the
+      image). Free at test time.
+\item Bigger input: all native slices, 384--512\,px, 5 series. A validation ruler checked against the leaderboard.
+      One model: 0.954 private in \ca 4 minutes.
+\end{itemize}
+\end{tldr}
+
+\section{Two kinds of boxes}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.5]
+  \kneesagittal
+  % anatomy (ROI) box: the whole ACL region
+  \draw[us, line width=1.6pt] (4.4,4.3) rectangle (6.6,6.8);
+  \node[font=\scriptsize\bfseries, text=us, anchor=south west, fill=white, inner sep=1pt] at (4.4,6.85) {ACL anatomy box};
+  % anatomy box: patellofemoral
+  \draw[us, line width=1.6pt, dashed] (2.1,6.0) rectangle (4.3,9.1);
+  \node[font=\scriptsize\bfseries, text=us, anchor=east, fill=white, inner sep=1pt] at (2.05,8.6) {PF OA box};
+  % lesion boxes: bone bruise on femur and tibia
+  \fill[them, opacity=0.35] (6.3,5.4) ellipse (0.55 and 0.4);
+  \draw[them, line width=1.4pt] (5.7,4.95) rectangle (6.9,5.85);
+  \fill[them, opacity=0.35] (6.6,4.0) ellipse (0.5 and 0.3);
+  \draw[them, line width=1.4pt] (6.05,3.65) rectangle (7.15,4.35);
+  \node[font=\scriptsize\bfseries, text=them, anchor=west, fill=white, inner sep=1pt] at (7.4,3.5) {lesion boxes};
+\end{tikzpicture}\hspace{6mm}
+\begin{minipage}[b]{0.48\linewidth}\small
+\textcolor{us}{\textbf{Anatomy box}} (``region of interest'', ROI): where a finding is \emph{assessed}, whether or not
+it is present. The ACL box covers the whole ligament; the PF OA box the kneecap and the femur's groove. A healthy knee
+has these boxes too.\par\medskip
+\textcolor{them}{\textbf{Lesion box}}: drawn tightly around a visible problem (here a bone bruise on femur and tibia),
+on every slice where it is visible. Only sick knees have them.\par\bigskip
+\end{minipage}
+\caption{The two kinds of spatial labels. Anatomy boxes tell the model \emph{where to look}; lesion boxes tell it
+\emph{what a problem looks like}.}
+\label{fig:boxes}
+\end{figure}
+
+\section{From a few agent boxes to boxes everywhere}
+
+Agents could only annotate part of the data: tascj's agents drew 3D anatomy boxes for 751 studies (21 sub-sessions in
+parallel, managed by one main session); sakaku's drew 2D boxes slice by slice on 39,415 images from 3,823 studies; the
+lesion agents boxed 3,616 lesions on 1,800 studies (111,029 boxes). A \term{detector} then learned to predict the
+anatomy boxes for every slice of every series, including the test series.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  st/.style={draw=grid, fill=white, rounded corners=1.5mm, minimum height=13mm, align=center, font=\scriptsize, text width=30mm},
+  ar/.style={-{Stealth[length=1.8mm]}, line width=0.7pt, muted}]
+  \node[st, draw=them] (a) at (0,0) {\faRobot\ agent boxes\\ on \textbf{some} studies};
+  \node[st, draw=accent, fill=keyfill] (b) at (42,0) {train a \textbf{box detector}\\ (a small CNN)};
+  \node[st] (c) at (84,0) {boxes on \textbf{every}\\ slice of every series};
+  \node[st] (d) at (126,0) {used by the\\ classifier};
+  \draw[ar] (a) -- (b); \draw[ar] (b) -- (c); \draw[ar] (c) -- (d);
+  \node[font=\scriptsize, text=muted, align=center] at (63,-14) {tascj: ConvNeXt-T per slice + 3D fusion, overlap with held-out boxes 0.71 (IoU)\\
+    sakaku: DINOv3 ConvNeXt-B + DETR decoder, 0.95 mAP50};
+\end{tikzpicture}
+\caption{Expanding sparse annotations with a detector. tascj's detector also runs inside the submission; sakaku used
+boxes for training only.}
+\end{figure}
+
+\begin{watchout}
+\textbf{Missing is not negative.} A slice without a box can mean ``structure not visible here'' or ``nobody
+annotated it''. sakaku stored three states per slice and finding: \emph{positive region}, \emph{reliable negative}
+(checked: structure absent), \emph{ignore}. Treating every empty slice as negative would teach the model the
+detector's misses.
+\end{watchout}
+
+\section{Box pooling}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=5mm,y=5mm]
+  % feature map 10x10
+  \foreach \i in {0,...,9} \foreach \j in {0,...,9} {
+    \pgfmathsetmacro{\v}{10+mod(\i*7+\j*13,30)}
+    \fill[us!\v] (\i,\j) rectangle ++(1,1);
+  }
+  \draw[white, line width=0.4pt] (0,0) grid (10,10);
+  \draw[them, line width=1.8pt] (5,2) rectangle (8,5);
+  \node[font=\scriptsize\bfseries, text=them, anchor=south west, fill=white, inner sep=1pt] at (5,5.05) {medial-meniscus box};
+  \draw[third!80!black, line width=1.8pt, dashed] (1,2) rectangle (4,5);
+  \node[font=\scriptsize\bfseries, text=third!70!black, anchor=north west, fill=white, inner sep=1pt] at (1,1.95) {lateral-meniscus box};
+  \node[font=\scriptsize, align=center] at (5,-0.9) {feature map of one slice (each cell = a small patch of the image)};
+  % outputs
+  \draw[-{Stealth}, them, line width=1pt] (8.2,3.5) -- (12,3.5);
+  \node[draw=them, fill=whyfill, rounded corners=1mm, font=\scriptsize, align=center, anchor=west] at (12,3.5) {average inside\\ the box $\rightarrow$\\ \textbf{Medial meniscus}};
+  \draw[-{Stealth}, third!80!black, line width=1pt] (2.5,5.3) -- (2.5,8.5) -- (12,8.5);
+  \node[draw=third!80!black, fill=wordfill, rounded corners=1mm, font=\scriptsize, align=center, anchor=west] at (12,8.5) {average inside\\ the box $\rightarrow$\\ \textbf{Lateral meniscus}};
+\end{tikzpicture}
+\caption{Box pooling on a coronal slice of a right knee (lateral side on the left, as in Figure~\ref{fig:anatomy}). Each finding averages only the features inside its own anatomy box (weighted by
+how much of each cell the box covers), then one small linear layer turns that into the finding's score. A learned
+\emph{in-box attention} later lets the model weight the most suspicious cells within the box more.}
+\label{fig:boxpool}
+\end{figure}
+
+\begin{why}
+Our model pooled whole slices (Figure~\ref{fig:attnpool}): it had to discover by itself which pixels belong to the
+lateral meniscus. Box pooling hands it that knowledge. It also explains why the canonical side helped them and not us:
+with boxes, ``medial'' and ``lateral'' are explicit regions; without boxes, the side was just one more thing to learn.
+\end{why}
+
+\section{Learning from boxes and reports during training only}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  st/.style={draw=grid, fill=white, rounded corners=1.5mm, minimum height=10mm, align=center, font=\scriptsize, text width=26mm},
+  ar/.style={-{Stealth[length=1.8mm]}, line width=0.7pt, muted}]
+  \node[st, draw=accent, fill=keyfill, minimum height=24mm] (bb) at (0,0) {backbone\\ feature maps};
+  \node[st, draw=accent, line width=0.9pt] (main) at (45,14) {\textbf{box pooling}\\ $\rightarrow$ 12 findings};
+  \node[st, dashed] (les) at (45,0) {\textbf{lesion head}\\ where are lesions?};
+  \node[st, dashed] (rep) at (45,-14) {\textbf{report head}\\ predict the report's\\ embedding};
+  \draw[ar] (bb) -- (main.west); \draw[ar, dashed] (bb) -- (les.west); \draw[ar, dashed] (bb) -- (rep.west);
+  \node[font=\scriptsize, anchor=west, align=left] at (62,14) {soft labels (BCE) \hfill \textbf{used at test time}};
+  \node[font=\scriptsize, anchor=west, align=left, text=muted] at (62,0) {lesion boxes (BCE per cell), weight 1};
+  \node[font=\scriptsize, anchor=west, align=left, text=muted] at (62,-14) {report text $\rightarrow$ Qwen3-Embedding-8B (4,096 numbers);\\
+    loss $= 1 - \cos(\text{predicted}, \text{actual})$, weight 0.3};
+  \node[font=\scriptsize, text=muted] at (45,-24) {dashed = training only, removed for the submission};
+\end{tikzpicture}
+\caption{Auxiliary targets (tascj's model). They shape what the backbone learns but cost nothing at test time.}
+\label{fig:auxheads}
+\end{figure}
+
+\begin{keyidea}
+\textbf{The report-embedding head uses the report without needing it at test time.} An \term{embedding} is a list of
+numbers that captures a text's meaning. Asking the image model to predict the report's embedding forces it to learn
+everything the report talks about, not just the 12 findings. This needed no hosted LLM: an open-weights embedding model
+was enough. It is the one idea that was fully open to us under our own rule.
+\end{keyidea}
+
+\section{The input: more of everything}
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X}
+\toprule
+ & \textcolor{us}{\textbf{us}} & \textcolor{them}{\textbf{winners}} \\
+\midrule
+series & 3 fluid-sensitive & 5 roles (+ sagittal and coronal without fat suppression); one model type used every series as its own sample \\
+slices & 24, resampled & up to 64 \textbf{native} slices (or 32 sampled, 30 windows at test time) \\
+pixels & 140\,mm at 256\,px (0.55\,mm) & 140\,mm at 384--512\,px; joint crop 112\,mm at 384\,px (0.29\,mm) \\
+image unit & 2.5D triplets & single slices (tascj) or triplets (sakaku) \\
+left/right & mirror augmentation & left knees mirrored to right; side from DICOM header, else a side classifier (99.3\,\%) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{What each piece was worth}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[ybar, width=\linewidth, height=6.4cm, bar width=9mm, ymin=0.925, ymax=0.946,
+    symbolic x coords={a,b,c,d,e,f}, xtick=data,
+    xticklabels={{plain per-slice\\ ConvNeXt-T}, {+ box\\ pooling}, {+ 112\,mm\\ joint crop}, {+ in-box\\ attention},
+                 {+ calibrated\\ labels}, {+ lesion and\\ report heads}},
+    x tick label style={font=\scriptsize, align=center}, ylabel={gold macro AUC}, ylabel style={font=\footnotesize},
+    ymajorgrids, nodes near coords, point meta=y, every node near coord/.append style={font=\scriptsize,
+    /pgf/number format/fixed, /pgf/number format/precision=4, /pgf/number format/fixed zerofill},
+    yticklabel style={/pgf/number format/fixed, /pgf/number format/precision=3}]
+  \addplot[barthem] coordinates {(a,0.9319) (b,0.9330) (c,0.9386) (d,0.9396) (e,0.9410) (f,0.9432)};
+\end{axis}
+\end{tikzpicture}
+\caption{tascj's step-by-step test at 256\,px, one component at a time, on the 58 gold studies (5 fold models). Note
+the scale: the whole architecture adds \textbf{+0.011}. The starting point, 0.932, is already far above our 0.904,
+because of the labels and the input.}
+\label{fig:winablation}
+\end{figure}
+
+\section{Training}
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X}
+\toprule
+ & tascj & sakaku \\
+\midrule
+backbones & ConvNeXt-T, MambaOut-B+, MaxxViT-V2-B & MaxViT-V2-B, CoAtNet-rMLP-2 \\
+learning rate & $5\cdot10^{-5}$, constant after warm-up & backbone $8.9\cdot10^{-5}$ (layer-wise decay 0.9), new layers $10^{-3}$, one-cycle \\
+epochs & 8, EMA 0.999 & up to 30 for tests; final 19, average of epochs 15--19 \\
+loss & soft BCE + lesion + report & soft BCE + 0.05 ranking loss + box losses \\
+precision & fp16 + \code{torch.compile} & bf16 + activation checkpointing \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{wordcheck}
+\term{EMA} (exponential moving average): keep a slowly updated average copy of the weights and use that copy;
+it is usually a little better than the latest weights. \term{Layer-wise decay}: early backbone layers learn more
+slowly than late ones.
+\end{wordcheck}
+
+\begin{innumbers}
+sakaku found that raising the backbone learning rate about 10$\times$ improved the public score from 0.936 to 0.944,
+while the 58-study gold score went \emph{down} (0.928 $\rightarrow$ 0.922). That disagreement is what pushed the team to
+build a better ruler.
+\end{innumbers}
+
+\section{A ruler they could trust}
+
+Instead of the noisy 58 gold studies, they scored models on out-of-fold predictions for thousands of report-labelled
+studies, against their best agent labels. To decide \emph{which} ruler to trust, they collected 20--30 leaderboard
+scores and kept the one that tracked the leaderboard best.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \node[font=\small] at (0,0) {$\displaystyle \text{SoftAUC} = \frac{\sum_{i \neq j} q_i\,(1-q_j)\cdot[\,\text{pred}_i > \text{pred}_j\,]}{\sum_{i\neq j} q_i\,(1-q_j)}$};
+  \node[font=\scriptsize, align=left, anchor=west] at (48,0) {$q$ = reference soft label.\\
+     A pair counts as much as ``$i$ is sick and $j$ is healthy''\\ is likely; ties get half credit.};
+\end{tikzpicture}
+\caption{\term{SoftAUC}: AUC against soft reference labels, without rounding them to 0/1 (sakaku). It keeps the
+labels' uncertainty in the measurement.}
+\end{figure}
+
+\section{The final ensemble}
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}X l l c}
+\toprule
+Model (all 384\,px) & Labels & Copies & Weight \\
+\midrule
+\multicolumn{4}{l}{\textit{tascj's half}} \\
+ConvNeXt-T (alone: 0.967 public / 0.958 private) & trained-guide Astra & 5 folds & 2 \\
+MambaOut-B+ & calibrated Astra (+ extra heads) & full data $\times$ 3 seeds & 1 \\
+MaxxViT-V2-B & same & full data $\times$ 3 seeds & 1 \\
+ConvNeXt-T, 6-channel & mean of two Astra versions & full data $\times$ 3 seeds & 1 \\
+MambaOut-B+, 6-channel & same & full data $\times$ 3 seeds & 1 \\
+\multicolumn{4}{l}{\textit{sakaku's half (alone: 0.967 public / 0.957 private)}} \\
+MaxViT-V2-B & Mix5 (five sources) & full data & 1/3 \\
+MaxViT-V2-B & focus-guided Astra & full data & 1/3 \\
+CoAtNet-rMLP-2 & Mix5 & full data & 1/3 \\
+\midrule
+\textbf{Team, 50/50} & & & \textbf{0.969 / 0.960} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{wordcheck}
+\term{6-channel input}: instead of 3 neighbouring slices of one series, each input image has 6 channels, one per
+(plane $\times$ fat suppression) kind, all resampled in 3D onto the current slice. The model sees the same spot in
+several sequences at once. According to tascj this added more than switching backbones did.
+\end{wordcheck}
+
+\section{The efficiency notebook: 0.954 in four minutes}
+
+\begin{itemize}
+\item One ConvNeXt-T at 256\,px, trained-guide labels, all training data, one checkpoint, plus the box detector.
+\item Inference compiled with \term{TensorRT} (NVIDIA's optimiser), one process per T4, DICOM reading in C++, and only
+      the fluid-sensitive series read (41\,\% less data).
+\item With 1,200 training studies laid out as a test set: \textbf{230 seconds} for the whole notebook.
+      \textbf{0.964 public / 0.954 private}.
+\end{itemize}
+
+\begin{innumbers}
+With the efficiency formula (Chapter~\ref{ch:competition}), if the hidden-test run was as fast as their own test:
+$-2.16 \times 0.954 + 0.07/9 \approx -2.05$. A 1-hour notebook
+would need about 0.05 more AUC to match it. Kaggle's disk speed varied from \ca 30 to 500+\,MB/s with platform load, so
+they submitted when the platform was quiet.
+\end{innumbers}
+
+\section{How they worked}
+
+Both write-ups describe a workflow driven by AI coding agents: one agent was asked to develop and improve the
+labelling instructions against the gold studies, and tascj notes that most model ideas came from asking Claude
+(Opus 5.5) to propose ways to use the boxes and to run the experiments. The humans chose the direction, built the
+measuring stick, and decided what to trust.
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can explain the difference between an anatomy box and a lesion box.
+\done I can explain box pooling and why it helps side-specific findings.
+\done I know what auxiliary heads are and why they are free at test time.
+\quiz Q13.1: Why is predicting the report's embedding useful when the test set has no reports?
+\quiz Q13.2: The team's whole architecture added +0.011 on gold. Where did the rest of their lead over us come from?
+\quiz Q13.3: Why did they choose their validation ruler by correlation with the leaderboard instead of using gold?
+\end{itemize}
+\end{checkpoint}

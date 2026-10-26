@@ -1,0 +1,104 @@
+\chapter{Answers to the checkpoints}
+\label{app:answers}
+
+\small
+\newcommand{\ans}[2]{\par\textbf{#1}\quad #2\par}
+\setlength{\parskip}{0.45em}
+
+\subsection*{Chapter 1}
+\ans{Q1.1}{You never see the test data, and a crash anywhere means no score at all, discovered only hours later. In a
+normal competition you upload a file you can check first.}
+\ans{Q1.2}{Not necessarily. With \ca 390 public studies the score wobbles by about $\pm$0.005, so 0.003 is within noise.}
+\ans{Q1.3}{No. +0.01 AUC is worth about 0.022 efficiency points; one hour costs about 0.11.}
+
+\subsection*{Chapter 2}
+\ans{Q2.1}{No. ``Small'' is below the threshold; only moderate or large effusions count.}
+\ans{Q2.2}{Medial OA, Lateral OA and PF OA: the same cartilage-loss rule (about 1\,cm or more with over half the thickness
+lost), each in a different compartment.}
+\ans{Q2.3}{Medial and lateral swap sides between a left and a right knee. A side-blind model cannot use position to tell
+the two menisci apart and has to rely on shape and context.}
+
+\subsection*{Chapter 3}
+\ans{Q3.1}{On T1, edema is greyish against bright fatty marrow: hard to see. On fat-suppressed PD the marrow is dark and
+the edema bright: easy.}
+\ans{Q3.2}{MRI brightness has no units; it depends on scanner, coil, sequence and patient. Each series must be
+normalised on its own.}
+\ans{Q3.3}{For example the MCL, which runs along the side of the knee and is best seen on coronal slices. (PF OA and
+Baker's cyst, best on axial, are other good answers.)}
+
+\subsection*{Chapter 4}
+\ans{Q4.1}{File names are random IDs. Only the physical position gives the true order.}
+\ans{Q4.2}{Not necessarily. The gold set was chosen to contain many positives, so its prevalence is higher by design.
+Compare labels with gold by AUC, not by prevalence.}
+\ans{Q4.3}{The test studies have no reports. Only images are available at test time.}
+
+\subsection*{Chapter 5}
+\ans{Q5.1}{Three different neighbouring slices give the network some depth context (a tear that continues across
+slices) at no extra cost; a copied slice gives it nothing new.}
+\ans{Q5.2}{$p = 0.5$. The model learns ``don't be confident about this one'', which is the honest message of an unknown
+label.}
+\ans{Q5.3}{Only a little. Same images and labels lead to strongly correlated mistakes; ensembles help when the members
+differ.}
+
+\subsection*{Chapter 6}
+\ans{Q6.1}{1.0. Every sick study scores above every healthy one; only the order matters.}
+\ans{Q6.2}{Nothing. The order of the predictions does not change.}
+\ans{Q6.3}{Synovitis: +0.04/12 $\approx$ +0.0033 on the macro AUC, against +0.01/12 $\approx$ +0.0008 for Baker's.}
+
+\subsection*{Chapter 7}
+\ans{Q7.1}{``Absent'' means the report says the structure is normal; ``not mentioned'' is silence. For Synovitis the
+difference is large: 15 of 41 silent gold studies were positive.}
+\ans{Q7.2}{Near-perfect labels do not make the images easier. The image model still has to see the tear, with limited
+resolution and capacity; and 58 gold studies measure it with noise.}
+\ans{Q7.3}{Spending many GPU hours labelling everything with a labeller that turns out worse. The gold studies are
+labelled first, and the long run starts only if they are clearly better.}
+
+\subsection*{Chapter 8}
+\ans{Q8.1}{Brightness differs between series, even within one exam; normalising per series removes those differences,
+a dataset-wide rule would keep them.}
+\ans{Q8.2}{$200/140 \approx 1.43$ times finer (for example 0.78\,mm $\rightarrow$ 0.55\,mm per pixel).}
+\ans{Q8.3}{The study would describe an impossible knee: the sagittal series says ``left knee'', the coronal and axial
+say ``right knee''. The model would see contradictory geometry.}
+
+\subsection*{Chapter 9}
+\ans{Q9.1}{8 studies $\times$ 3 series $\times$ 8 triplets = 192 images.}
+\ans{Q9.2}{Gold studies are never trained on, so all 5 fold models are fair predictors and their average is a free
+ensemble. Each training study was held out by exactly one fold model; only that model is unbiased for it.}
+\ans{Q9.3}{Neither number alone is decisive at this noise level. Keep both and blend them, which is what we did (gold 0.903).}
+
+\subsection*{Chapter 10}
+\ans{Q10.1}{Any difference (resizing, orientation) changes what the model sees; the model was never trained on such
+images, and the score drops without any error message.}
+\ans{Q10.2}{The ranks cancel out: every study ends near the middle and the finding becomes close to random (AUC near 0.5
+if the two models are exactly opposite).}
+\ans{Q10.3}{It restores the backup of the public notebook's staged predictions, so the public result is submitted unchanged.}
+
+\subsection*{Chapter 11}
+\ans{Q11.1}{A threshold for continuing an experiment, fixed in advance, so that noise is not talked into ``progress''
+after the fact.}
+\ans{Q11.2}{In their model the side is used explicitly (side-aware boxes and box pooling), so a consistent orientation
+helps. Our model had no use for the side, and lost the regularising effect of mirror augmentation.}
+\ans{Q11.3}{For example: the public notebook's per-finding weights had been tuned on the public leaderboard and did not
+carry over to the private part; or simply noise. The winners picked models with a ruler, not by probing the leaderboard.}
+
+\subsection*{Chapter 12}
+\ans{Q12.1}{AUC ignores calibration. A label set with many confidently wrong labels can rank well but teaches the model
+to be confidently wrong; log loss and confident errors catch that.}
+\ans{Q12.2}{Reports rarely describe synovitis, and when they do the agent would just copy the wording. Without it, the
+agent has to judge from the images, like the gold radiologists.}
+\ans{Q12.3}{A guide learned on other folds is applied to studies it has never seen: an honest test. The in-sample guide
+has seen the answers.}
+
+\subsection*{Chapter 13}
+\ans{Q13.1}{To predict the embedding, the image features must encode what the report talks about. At test time the head
+is simply removed, so no report is needed.}
+\ans{Q13.2}{Mostly from the labels, plus input and backbone: their plain per-slice model already reached 0.932 on gold,
+against our 0.904; then bigger inputs and ensembles on the leaderboard.}
+\ans{Q13.3}{58 gold studies are too few ($\pm$0.02) and sometimes disagreed with the leaderboard. A ruler that tracks
+20--30 leaderboard scores is known to measure what matters.}
+
+\subsection*{Chapter 14}
+\ans{Q14.1}{Checking the rules thread on day one: it would have allowed image-reading labels from the start, the largest
+single source of the gap.}
+\ans{Q14.2}{Yes, more slowly: an open-weights vision-language model running on Kaggle, or a few hundred studies annotated
+by hand or by simple anatomy heuristics, followed by a detector trained on them.}

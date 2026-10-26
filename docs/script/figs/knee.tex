@@ -1,0 +1,101 @@
+% ---------------------------------------------------------------------------
+% Schematic knee drawings, reused by several chapters.
+% Both macros draw into the current tikzpicture in a 10 x 12 unit frame (scale them with the picture).
+%   \kneesagittal : side view of a knee, front of the leg (anterior) on the LEFT, like the MRI images.
+%   \kneecoronal  : front view of a RIGHT knee; the lateral side is on the viewer's LEFT.
+% Overlays (lesions, boxes, labels) are drawn by each figure using the coordinates noted below.
+% ---------------------------------------------------------------------------
+\definecolor{kSoft}{HTML}{F5EDE8}     \definecolor{kSoftLine}{HTML}{D9C7BC}
+\definecolor{kBone}{HTML}{EBDDC2}     \definecolor{kBoneLine}{HTML}{AE9B79}
+\definecolor{kCart}{HTML}{8DB9E6}
+\definecolor{kMen}{HTML}{3F6C9E}
+\definecolor{kLig}{HTML}{C8553D}
+\definecolor{kTendon}{HTML}{B79F78}
+\definecolor{kFluid}{HTML}{CBE6F6}    \definecolor{kFluidLine}{HTML}{4E95CF}
+
+% Sagittal landmarks: femoral condyle centre (5.5,6.75) r 1.95 | tibial plateau y = 4.55 (x 3.6-7.6)
+% patella (2.85,7.55) | ACL (4.75,4.62)-(6.15,6.45) | anterior meniscus horn ~ (4.0,4.8), posterior horn ~ (7.0,4.8)
+% suprapatellar recess (3.75,9.4) | Baker's cyst site (7.95,6.0)
+\newcommand{\kneesagittal}{%
+  \begin{scope}
+    \clip (0,0) rectangle (10.5,12);
+    \fill[kSoft, draw=kSoftLine, line width=0.6pt] plot[smooth cycle, tension=0.65] coordinates
+      {(2.0,12.6) (1.75,10) (1.85,8.4) (2.15,7.0) (2.65,5.4) (3.0,4.0) (3.35,2.0) (3.45,-0.6) (7.65,-0.6)
+       (7.9,2.0) (8.6,3.8) (9.05,5.6) (8.95,7.6) (8.55,9.8) (8.35,12.6)};
+    % bone outlines first (thick), then fills on top = one outline around the union
+    \begin{scope}[draw=kBoneLine, line width=1.4pt]
+      \draw (4.5,12.6) -- (4.5,8.4) (6.5,8.4) -- (6.5,12.6);
+      \draw (5.5,6.75) circle (1.95);
+      \draw[rounded corners=6pt] (3.6,4.55) -- (7.6,4.55) -- (7.5,3.7) -- (6.6,2.9) -- (6.45,-0.6) -- (4.45,-0.6)
+            -- (4.3,2.9) -- (3.75,3.45) -- cycle;
+      \draw[rotate around={-8:(2.85,7.55)}] (2.85,7.55) ellipse (0.5 and 1.15);
+    \end{scope}
+    \fill[kBone] (4.5,12.6) -- (4.5,8.4) -- (6.5,8.4) -- (6.5,12.6) -- cycle;
+    \fill[kBone] (4.5,8.6) -- (3.9,7.4) -- (7.1,7.4) -- (6.5,8.6) -- cycle;
+    \fill[kBone] (5.5,6.75) circle (1.95);
+    \fill[kBone, rounded corners=6pt] (3.6,4.55) -- (7.6,4.55) -- (7.5,3.7) -- (6.6,2.9) -- (6.45,-0.6) -- (4.45,-0.6)
+          -- (4.3,2.9) -- (3.75,3.45) -- cycle;
+    \fill[kBone, rotate around={-8:(2.85,7.55)}] (2.85,7.55) ellipse (0.5 and 1.15);
+    % cartilage
+    \draw[kCart, line width=2.2pt] (5.5,6.75) ++(165:1.84) arc (165:335:1.84);
+    \draw[kCart, line width=2.0pt] (3.75,4.47) -- (7.45,4.47);
+    \draw[kCart, line width=1.8pt, rotate around={-8:(2.85,7.55)}] (3.29,6.75) arc (-40:40:0.95);
+    % tendons
+    \draw[kTendon, line width=5pt, line cap=round] (3.1,12.6) -- (2.97,8.7);
+    \draw[kTendon, line width=4pt, line cap=round] (2.72,6.45) -- (3.85,3.5);
+    % joint fluid in the suprapatellar recess
+    \fill[kFluid, draw=kFluidLine, line width=0.4pt] (3.78,9.4) ellipse (0.28 and 0.95);
+    % menisci (anterior and posterior horn)
+    \fill[kMen] (3.72,4.6) -- (4.6,4.6) -- (3.8,5.12) -- cycle;
+    \fill[kMen] (6.45,4.6) -- (7.38,4.6) -- (7.28,5.2) -- cycle;
+    % intercondylar notch (the gap between the condyles where the cruciates run), its roof line drawn as bone edge
+    \fill[kSoft] (4.75,4.75) -- (6.95,4.75) -- (7.05,5.5) -- (6.5,6.7) -- (4.7,5.2) -- cycle;
+    \draw[kBoneLine, line width=1pt] (4.7,5.2) -- (6.5,6.7);
+    % cruciate ligaments
+    \draw[kLig!55, line width=3pt, line cap=round] (6.85,4.35) .. controls (7.05,5.7) and (6.3,6.45) .. (5.25,6.2);
+    \draw[kLig, line width=3.4pt, line cap=round] (4.75,4.62) -- (6.15,6.45);
+  \end{scope}}
+
+% Coronal landmarks (right knee, front view): lateral condyle (3.55,5.95) r 1.2, medial condyle (6.45,5.95) r 1.2
+% tibial plateau y = 4.5 (x 2.3-7.7) | lateral meniscus ~ (2.75,4.8), medial meniscus ~ (7.25,4.8)
+% MCL along x ~ 7.8 (y 2.2-6.9) | LCL (2.3,6.6)-(1.95,3.25) | notch (5.0,5.15)
+\newcommand{\kneecoronal}{%
+  \begin{scope}
+    \clip (0,0) rectangle (10,12);
+    \fill[kSoft, draw=kSoftLine, line width=0.6pt] plot[smooth cycle, tension=0.65] coordinates
+      {(1.25,12.6) (1.0,9) (0.9,6.5) (1.2,4.5) (1.8,2.5) (2.3,-0.6) (7.7,-0.6) (8.2,2.5) (8.8,4.5) (9.1,6.5)
+       (9.0,9) (8.75,12.6)};
+    \begin{scope}[draw=kBoneLine, line width=1.4pt]
+      \draw (4.0,12.6) -- (4.0,8.6) -- (2.45,6.6) (6.0,12.6) -- (6.0,8.6) -- (7.55,6.6);
+      \draw (3.55,5.95) circle (1.2) (6.45,5.95) circle (1.2);
+      \draw[rounded corners=6pt] (2.3,4.5) -- (7.7,4.5) -- (7.6,3.6) -- (6.2,2.6) -- (6.0,-0.6) -- (4.0,-0.6)
+            -- (3.8,2.6) -- (2.4,3.6) -- cycle;
+      \draw[rounded corners=4pt] (1.75,3.3) -- (2.55,3.3) -- (2.5,2.6) -- (2.35,-0.6) -- (1.95,-0.6) -- (1.85,2.6) -- cycle;
+    \end{scope}
+    \fill[kBone] (4.0,12.6) -- (4.0,8.6) -- (2.45,6.4) -- (7.55,6.4) -- (6.0,8.6) -- (6.0,12.6) -- cycle;
+    \fill[kBone] (3.55,5.95) circle (1.2) (6.45,5.95) circle (1.2);
+    \fill[kSoft] (5.0,5.05) ellipse (0.55 and 0.95);
+    \fill[kBone, rounded corners=6pt] (2.3,4.5) -- (7.7,4.5) -- (7.6,3.6) -- (6.2,2.6) -- (6.0,-0.6) -- (4.0,-0.6)
+          -- (3.8,2.6) -- (2.4,3.6) -- cycle;
+    \fill[kBone] (4.65,4.45) -- (4.85,4.9) -- (5.15,4.9) -- (5.35,4.45) -- cycle;
+    \fill[kBone, rounded corners=4pt] (1.75,3.3) -- (2.55,3.3) -- (2.5,2.6) -- (2.35,-0.6) -- (1.95,-0.6) -- (1.85,2.6) -- cycle;
+    % cartilage
+    \draw[kCart, line width=2.0pt] (3.55,5.95) ++(200:1.1) arc (200:330:1.1);
+    \draw[kCart, line width=2.0pt] (6.45,5.95) ++(210:1.1) arc (210:340:1.1);
+    \draw[kCart, line width=1.8pt] (2.55,4.43) -- (4.55,4.43) (5.45,4.43) -- (7.45,4.43);
+    % menisci: wedges at the outer edges of the joint
+    \fill[kMen] (2.25,4.58) -- (3.3,4.58) -- (2.35,5.15) -- cycle;
+    \fill[kMen] (7.75,4.58) -- (6.7,4.58) -- (7.65,5.15) -- cycle;
+    % collateral ligaments
+    \draw[kLig, line width=3pt, line cap=round] plot[smooth] coordinates {(7.6,7.0) (7.86,4.7) (7.55,2.2)};
+    \draw[kLig, line width=2.5pt, line cap=round] (2.3,6.6) -- (1.98,3.3);
+    % cruciates in the notch
+    \draw[kLig, line width=1.8pt, line cap=round] (4.8,4.55) -- (5.25,5.75);
+    \draw[kLig!55, line width=1.8pt, line cap=round] (5.2,4.55) -- (4.78,5.8);
+  \end{scope}}
+
+% A small "label with leader line": \klabel{(point)}{(text position)}{anchor}{text}
+\newcommand{\klabel}[4]{%
+  \draw[ink!70, line width=0.4pt] #1 -- #2;
+  \fill[ink!70] #1 circle (0.06);
+  \node[anchor=#3, font=\scriptsize\sffamily, text=ink, inner sep=1.5pt, align=left] at #2 {#4};}

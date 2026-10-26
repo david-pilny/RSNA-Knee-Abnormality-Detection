@@ -1,0 +1,207 @@
+\chapter{Everything we tried}
+\label{ch:experiments}
+\whereami{6}
+
+\begin{tldr}
+\begin{itemize}
+\item Own pipeline: \textbf{0.882 $\rightarrow$ 0.889 $\rightarrow$ 0.905 $\rightarrow$ 0.918} on the public leaderboard. The two
+      real jumps came from \textbf{better labels} (v4) and \textbf{cropping the knee} (v5).
+\item A forked public notebook scored \textbf{0.943}; adding our models to it never helped.
+\item Higher resolution (320\,px) and a canonical knee side gave \textbf{nothing measurable}; we stopped each after one
+      fold, by rules written in advance.
+\item Final result: \textbf{0.927 private}, rank \textbf{2,968 of 6,425}. The winners: 0.960.
+\end{itemize}
+\end{tldr}
+
+\section{The scoreboard}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=\linewidth, height=7.2cm, ymin=0.868, ymax=0.982, xmin=0.5, xmax=10.5,
+    xtick={1,...,10}, xticklabels={v3\\4 folds, v3\\5 folds, v4, v3+v4, fork, {fork +\\v4 0.25}, {fork +\\v4 0.4},
+    v5 own, {fork +\\v5 0.25}, {fork +\\v5 0.4}}, x tick label style={font=\scriptsize, align=center},
+    ylabel={public leaderboard AUC}, ylabel style={font=\footnotesize}, ymajorgrids,
+    yticklabel style={/pgf/number format/fixed, /pgf/number format/precision=2},
+    legend style={at={(0.02,0.98)}, anchor=north west}]
+  \addplot[us, line width=1.2pt, mark=*, mark size=2.4pt, nodes near coords, point meta=y,
+     nodes near coords align={below}, every node near coord/.append style={font=\scriptsize, text=us!85!black,
+     /pgf/number format/fixed, /pgf/number format/precision=3, /pgf/number format/fixed zerofill}]
+     coordinates {(1,0.882) (2,0.889) (3,0.905) (4,0.906) (8,0.918)};
+  \addplot[them, only marks, mark=square*, mark size=2.4pt, nodes near coords, point meta=y,
+     nodes near coords align={above}, every node near coord/.append style={font=\scriptsize, text=them!85!black,
+     /pgf/number format/fixed, /pgf/number format/precision=3, /pgf/number format/fixed zerofill}]
+     coordinates {(5,0.943) (6,0.943) (7,0.936) (9,0.943) (10,0.939)};
+  \addplot[muted, dashed, domain=0.5:10.5] {0.969};
+  \node[font=\scriptsize, anchor=south east, text=muted] at (axis cs:10.4,0.969) {winners: 0.969 public};
+  \legend{{our own pipeline}, {public notebook (+ our models)}}
+\end{axis}
+\end{tikzpicture}
+\caption{Every scored submission we recorded, in order. Public leaderboard, so differences below \ca 0.005 are noise.}
+\label{fig:scoreboard}
+\end{figure}
+
+\newcommand{\experiment}[6]{%
+  \begin{tcolorbox}[enhanced, colback=white, colframe=#6, boxrule=0.6pt, leftrule=2.2mm, arc=1.2mm,
+     title={#1}, fonttitle=\bfseries\small, coltitle=ink, colbacktitle=#6!12, left=3mm, right=3mm, top=1.4mm,
+     bottom=1.4mm, fontupper=\small, before skip=0.8em, after skip=0.8em]
+  \textbf{Idea.} #2\par\smallskip
+  \textbf{What we did.} #3\par\smallskip
+  \textbf{Result.} #4\par\smallskip
+  \textbf{Verdict.} #5
+  \end{tcolorbox}}
+
+\section{Experiment by experiment}
+
+\experiment{E1 \quad Baseline: v3 labels, whole knee, EfficientNet-B0}
+  {Get a complete, working pipeline end to end before improving anything.}
+  {v3 labels (Chapter~\ref{ch:labels}); whole field of view resized to 24\,$\times$\,224\,$\times$\,224; the
+   \code{KneeNet} of Chapter~\ref{ch:model}; 4, then 5 folds.}
+  {\textbf{0.882} (4 folds) and \textbf{0.889} (5 folds) public; gold macro 0.876.}
+  {Works. Next question: where is it weak, and why?}{muted}
+
+\experiment{E2 \quad Detective work: compare model and labels per finding}
+  {If the model is only as good as its labels on some findings, better labels are the lever there.}
+  {Scored the labels themselves against the 58 gold studies and put them next to the model's gold AUC, per finding.
+   Compared with numbers that other teams published for hosted-LLM labels.}
+  {On ACL, MCL, PF OA and the menisci the model sat at the level of its labels, and those labels were 0.07--0.19 below
+   what a strong labeller reached. On Effusion, Contusion, Fracture and Baker's the model was already far above its
+   labels.}
+  {\textbf{Rebuild the labels} $\rightarrow$ E3. A cheap analysis that pointed to the biggest gain.}{us}
+
+\experiment{E3 \quad v4 labels}
+  {Follow the organisers' thresholds, keep ``not mentioned'' separate, read probabilities (Chapter~\ref{ch:labels}).}
+  {New labeller with Qwen2.5-32B; same images, same model, retrained 5 folds.}
+  {Label agreement 0.809 $\rightarrow$ 0.879. Model: \textbf{0.905} public (+0.016), gold 0.884. ACL, MCL and PF OA
+   improved by 0.05--0.10 on gold. The menisci did not move.}
+  {\textbf{Kept.} The menisci not moving suggested an image problem (too little detail), not a label problem.}{wordline}
+
+\experiment{E4 \quad Blend the v3 and v4 models}
+  {Two label sets = two different opinions; average them.}
+  {Rank blend of the two 5-fold groups, v3 switched off for ACL, MCL and PF OA.}
+  {Gold 0.884 $\rightarrow$ 0.896 (within noise: 90\,\% interval $-0.005$ to $+0.014$). Public \textbf{0.906} (+0.001).}
+  {Tiny gain. Same architecture + same images agree too much for blending to matter.}{muted}
+
+\experiment{E5 \quad Fork the best public notebook}
+  {The public leaderboard was crowded at \ca 0.94. Find out why.}
+  {Read the public write-ups: the 0.94 band consisted of forks of one inference notebook using published weights
+   of strong models (CoAtNet-RMLP-2, 2.5D attention, 336--384\,px, 44--64 slices from 5 series, plus DINOv2 and
+   RadImageNet models for diversity). Forked it unchanged.}
+  {\textbf{0.943} public, with no training of our own.}
+  {Our base for the final submission, and a reality check: the gap was input size, slice count and model size.}{them}
+
+\experiment{E6 \quad Our models as a member of the public ensemble}
+  {Our pipeline differs in labels and preprocessing; diversity should help an ensemble.}
+  {The member cell (Figure~\ref{fig:member}) with our v3+v4 blend, weights 0.25 and 0.4.}
+  {0.25: \textbf{0.943} (no change). 0.4: \textbf{0.936} (worse).}
+  {A 0.906 model does not help a 0.943 ensemble. A member must be both \emph{different} and \emph{nearly as strong}.
+   See Figure~\ref{fig:memberweight}.}{them}
+
+\experiment{E7 \quad v5: crop the knee, 256\,px, add ConvNeXt-Nano}
+  {More pixels on the joint should help the menisci (E3's diagnosis).}
+  {New cache: 140\,mm window around the knee, 256\,px (0.55\,mm per pixel instead of \ca 0.8). Trained EfficientNet-B0
+   and ConvNeXt-Nano, 5 folds each, rank-blended.}
+  {Fold 0: lateral meniscus on gold 0.784 $\rightarrow$ 0.876. Own pipeline \textbf{0.918} public (+0.012). As a member of
+   the fork: 0.943 (weight 0.25) and 0.939 (0.4).}
+  {\textbf{Kept} as our own best. Still not strong enough to lift the fork.}{wordline}
+
+\experiment{E8 \quad v6: 320\,px}
+  {If cropping helped, even more pixels might help more.}
+  {130\,mm window at 320\,px (0.41\,mm/px). Fold 0 of B0 and ConvNeXt-Nano. Stop rule written in advance: continue
+   only if validation AUC gains $\geq$ +0.005.}
+  {B0 +0.004, ConvNeXt-Nano +0.002, gold unchanged; cost 3.7 GPU hours for fold 0 of both models (ConvNeXt 1.8\,s/step).}
+  {\textbf{Stopped.} Folds 1--4 would cost \ca 10 GPU hours for maybe +0.003.}{warnline}
+
+\experiment{E9 \quad v7: canonical knee side}
+  {Mirror augmentation makes the model blind to left vs.\ right, but 4 findings are side-specific (medial/lateral
+   meniscus and OA), and our weakest included lateral meniscus and lateral OA.}
+  {A small side classifier (trained on studies with a \code{Laterality} tag, 49.8\,\%; hold-out accuracy 0.988), then
+   mirror every left knee so all look like right knees; no mirror augmentation, no mirror TTA. Fold 0, same rule.}
+  {B0 0.8616 vs.\ 0.8607 (a wash); ConvNeXt-Nano 0.8497 vs.\ 0.8568 (worse). Gold blend 0.903 $\rightarrow$ 0.8965.}
+  {\textbf{Stopped.} Lesson: mirror augmentation was \emph{regularisation}, not just side-blindness. Note that the
+   winners did canonicalise the side, but their model also used anatomy boxes that make the side meaningful
+   (Chapter~\ref{ch:winmodels}).}{warnline}
+
+\experiment{E10 \quad v8: a second model on a joint-only crop}
+  {A model that sees only the joint line at near-native detail (90\,mm at 256\,px = 0.35\,mm/px) would add
+   \emph{input} diversity for the menisci, OA, ACL and MCL, blended per finding with the whole-knee model.}
+  {Cache and training code built and tested locally on fake data; submission code able to prepare several crops from
+   one decoding.}
+  {Not recorded: no submission was made after early October.}
+  {Unknown. In hindsight the winners' 112\,mm joint crop gave them about +0.006 on gold: a real but small effect.}{muted}
+
+\section{Why our models could not lift the public ensemble}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=9cm, height=5.6cm, xmin=-0.03, xmax=0.45, ymin=0.932, ymax=0.947, xlabel={weight of our models (\code{OUR\_WEIGHT})},
+    ylabel={public AUC}, xtick={0,0.25,0.4}, ymajorgrids, xlabel style={font=\footnotesize}, ylabel style={font=\footnotesize},
+    yticklabel style={/pgf/number format/fixed, /pgf/number format/precision=3}, legend style={at={(0.02,0.03)}, anchor=south west}]
+  \addplot[us!55, line width=1.2pt, mark=*, mark size=2.2pt] coordinates {(0,0.943) (0.25,0.943) (0.4,0.936)};
+  \addplot[us, line width=1.2pt, mark=square*, mark size=2.2pt] coordinates {(0,0.943) (0.25,0.943) (0.4,0.939)};
+  \legend{{member = v3+v4 (0.906 alone)}, {member = v5 (0.918 alone)}}
+\end{axis}
+\end{tikzpicture}
+\caption{Real results. Blending our models into the 0.943 public ensemble never helped; at weight 0.4 it hurt. The
+stronger v5 member hurt less, which is what you expect: a member has to be close to the ensemble's strength (we
+estimated \ca 0.92--0.93 on its own) \emph{and} make different mistakes.}
+\label{fig:memberweight}
+\end{figure}
+
+\begin{keyidea}
+An ensemble improves when its members are \textbf{strong} and \textbf{different}. Our models were different
+(other labels, other preprocessing) but clearly weaker. Adding a weak member is like averaging a good forecast with
+a mediocre one: unless their errors are almost opposite, the average is worse than the good one.
+\end{keyidea}
+
+\section{How it ended}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \draw[muted, line width=0.8pt] (0,0) -- (140,0);
+  \foreach \v in {0.90,0.91,0.92,0.93,0.94,0.95,0.96} {
+    \pgfmathsetmacro{\x}{(\v-0.90)*2000}
+    \draw[muted] (\x,-1) -- (\x,1);
+    \node[font=\scriptsize, below] at (\x,-1) {\v};
+  }
+  \foreach \v/\lab/\c/\h in {0.927/{\textbf{us: 0.927}\\ rank 2,968 / 6,425}/us/10, 0.960/{\textbf{1st: 0.960}\\ Team Kangaroo}/them/10,
+                            0.951/{\ca 50th: 0.951}/muted/22} {
+    \pgfmathsetmacro{\x}{(\v-0.90)*2000}
+    \draw[\c, line width=1pt] (\x,0) -- (\x,\h);
+    \fill[\c] (\x,0) circle (1.2);
+    \node[font=\scriptsize, anchor=south, align=center, text=\c!85!black] at (\x,\h) {\lab};
+  }
+\end{tikzpicture}
+\caption{The private leaderboard (70\,\% of the test set). Our best selected submission and the top of the board.
+The top 50 teams were all within 0.01 of the winner.}
+\label{fig:finalLB}
+\end{figure}
+
+\begin{innumbers}
+\begin{itemize}
+\item Our public score 0.943 became \textbf{0.927} private ($-0.016$); the winners went 0.969 $\rightarrow$ 0.960
+      ($-0.009$). Public forks that had tuned per-finding weights on the public leaderboard may have lost more on the
+      private part; we cannot verify which of our submissions produced the 0.927.
+\item Our 14 entries were all made by early October; GPU hours (\ca 30 per week) and scoring time (\ca 6\,h) limited
+      how many ideas we could test.
+\end{itemize}
+\end{innumbers}
+
+\begin{watchout}
+The big decisions that shaped this result were made early and never revisited: report-only labels (because of a rule
+we had not checked) and a small model on a heavily resampled input (because of the GPU budget). Every later
+experiment (E7--E10) tuned details within those limits.
+\end{watchout}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can name the two experiments that gave real gains and say why the others did not.
+\done I can explain why a weaker member did not help the public ensemble.
+\quiz Q11.1: What is a ``stop rule'' and why write it before running an experiment?
+\quiz Q11.2: E9 (canonical side) failed for us but the winners used it. Give one reason that could explain both.
+\quiz Q11.3: Our public score dropped by 0.016 on the private leaderboard, the winners' by 0.009. Name one possible
+      reason for the difference.
+\end{itemize}
+\end{checkpoint}

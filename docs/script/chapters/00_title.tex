@@ -1,0 +1,35 @@
+\begin{titlepage}
+\thispagestyle{empty}
+\vspace*{8mm}
+{\large\scshape RSNA 2026 Knee Abnormality Detection\par}
+\vspace{6mm}
+{\fontsize{30}{36}\selectfont\bfseries Knee MRI, Labels\\[2mm] and Leaderboards\par}
+\vspace{6mm}
+{\Large A beginner's script: the data, everything we tried,\\ and how the winners did it\par}
+\vspace{12mm}
+\begin{center}
+\begin{tikzpicture}[scale=0.62]
+  \begin{scope}
+    \kneesagittal
+  \end{scope}
+  \begin{scope}[xshift=11.5cm]
+    \kneecoronal
+  \end{scope}
+  % twelve little finding tags
+  \foreach \t [count=\i from 0] in {ACL,MCL,Med.\ meniscus,Lat.\ meniscus,Med.\ OA,Lat.\ OA,PF OA,Effusion,Synovitis,Baker's,Contusion,Fracture} {
+    \pgfmathsetmacro{\col}{mod(\i,6)}
+    \pgfmathsetmacro{\row}{int(\i/6)}
+    \node[draw=accent, fill=keyfill, rounded corners=1mm, font=\scriptsize\sffamily, minimum width=21mm,
+          minimum height=5.5mm] at ({\col*3.75+1.35}, {-1.4-\row*1.05}) {\t};
+  }
+\end{tikzpicture}
+\end{center}
+\vfill
+{\large David Pilný\par}
+{\normalsize written together with Claude (Anthropic)\par}
+\vspace{2mm}
+{\normalsize October 2026\par}
+\vspace{6mm}
+{\small\textcolor{muted}{Twelve findings, one knee MRI exam per row, 4,407 training exams and only 58 of them labelled by doctors.
+This script explains how to turn that into a model, what we built, what scored what, and what the team that won did differently.}\par}
+\end{titlepage}

@@ -1,0 +1,259 @@
+\chapter[The winners, part 1: labels]{The winners, part 1: labels from AI agents}
+\label{ch:winlabels}
+
+\begin{tldr}
+\begin{itemize}
+\item First place: \textbf{Team Kangaroo} (Kaggle users tascj and sakaku), \textbf{0.969 public / 0.960 private}.
+\item They treated the competition ``mainly as a labelling competition''.
+\item For every training study an \textbf{AI agent} (a frontier model with tools) read the report \textbf{and looked at
+      the images}, wrote down its evidence, then gave a probability per finding.
+\item Their labels agreed with the doctors at \textbf{0.936--0.943} AUC (ours: 0.879). The same image model got
+      +0.013 public from the labels alone.
+\end{itemize}
+\end{tldr}
+
+\section{The big picture}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  src/.style={draw=grid, fill=white, rounded corners=1.5mm, align=center, font=\scriptsize, minimum height=11mm, text width=24mm},
+  ag/.style={draw=them, fill=whyfill, rounded corners=1.5mm, align=center, font=\scriptsize, minimum height=11mm, text width=30mm},
+  outb/.style={draw=them, fill=white, line width=0.8pt, rounded corners=1.5mm, align=center, font=\scriptsize, minimum height=11mm, text width=30mm},
+  ar/.style={-{Stealth[length=1.8mm]}, line width=0.7pt, muted}]
+  \node[src] (r) at (0,10) {\faFile\ report};
+  \node[src] (i) at (0,-10) {\faImage\ MRI series};
+  \node[ag] (a1) at (42,12) {\faRobot\ agent: 12 probabilities\\ (one session per study)};
+  \node[ag] (a2) at (42,-12) {\faRobot\ agents: boxes around\\ anatomy and lesions};
+  \node[outb] (o1) at (86,12) {\textbf{soft labels}\\ 4,349 $\times$ 12};
+  \node[outb] (o2) at (86,-12) {\textbf{boxes}\\ (training only)};
+  \node[draw=accent, fill=keyfill, rounded corners=2mm, align=center, font=\scriptsize, minimum height=30mm, text width=24mm]
+     (m) at (125,0) {\faBrain\\ image classifier\\[1mm] at test time:\\ \textbf{images only}};
+  \draw[ar] (r) -- (a1); \draw[ar] (i) -- (a1); \draw[ar] (i) -- (a2);
+  \draw[ar] (a1) -- (o1); \draw[ar] (a2) -- (o2); \draw[ar] (o1) -- (m); \draw[ar] (o2) -- (m);
+\end{tikzpicture}
+\caption{Two annotation paths feed one image model. The agents are used only to make training data; the
+submission runs the image model alone, offline. This chapter covers the upper path, Chapter~\ref{ch:winmodels} the lower.}
+\label{fig:winoverview}
+\end{figure}
+
+\section{An agent, not a prompt}
+
+Our labeller (Chapter~\ref{ch:labels}) was a \emph{prompt}: one fixed input, one answer. An \term{agent} is a
+language model running in a loop with tools: it looks at something, decides what it still needs to know, uses a tool
+to get it, and only answers when it is done.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  st/.style={draw=them, fill=whyfill, rounded corners=2mm, minimum width=36mm, minimum height=11mm, align=center, font=\scriptsize},
+  ar/.style={-{Stealth[length=2mm]}, line width=0.8pt, them}]
+  \node[st] (a) at (0,0) {\textbf{read}\\ instructions, report,\\ overview of each series};
+  \node[st] (b) at (50,12) {\textbf{decide}\\ ``is the ACL intact?\\ check sagittal 14--17''};
+  \node[st] (c) at (100,0) {\textbf{use a tool}\\ view those slices,\\ cropped and zoomed};
+  \node[st] (d) at (50,-12) {\textbf{look}\\ at the returned image\\ sheet};
+  \node[st, draw=wordline, fill=wordfill] (e) at (50,-34) {\textbf{answer}\\ evidence + 12 probabilities};
+  \draw[ar] (a) -- (b); \draw[ar] (b) -- (c); \draw[ar] (c) -- (d); \draw[ar] (d) -- (b);
+  \draw[ar, wordline] (d) -- (e) node[midway, right, font=\scriptsize] {when sure enough};
+  \node[font=\scriptsize, text=muted, align=center] at (100,-16) {up to \ca 10 tool calls;\\ median 2.5 minutes\\ and 15 images per study};
+\end{tikzpicture}
+\caption{One labelling session, for one study. 4,349 such sessions labelled the training set.}
+\label{fig:agentloop}
+\end{figure}
+
+\begin{wordcheck}
+\term{Agent}: a language model that can call tools (run a script, view an image) in a loop. \term{Frontier model}:
+the strongest hosted models of the time; here OpenAI's GPT-6 Astra and GPT-6.1 Sol, driven through command-line
+agent tools (Codex, Claude Code and others). \term{Non-interactive session}: the agent runs alone, start to finish,
+and returns an answer in a fixed format.
+\end{wordcheck}
+
+\section{The agent's workspace}
+
+Each study got its own folder, prepared before the agent started:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm, every node/.style={font=\scriptsize, anchor=west}]
+  \node at (0,0) {\faFolder\ \code{<workspace>/}};
+  \draw[muted] (2,-2) -- (2,-31);
+  \foreach \y/\t/\c in {-5/{\faFile\ \code{AGENTS.md}}/{task, the 12 definitions and thresholds, series table, \textbf{the full report}, answer format},
+                     -11/{\faFolder\ \code{overviews/}}/{one overview sheet per fluid series (up to 48 slices, 6 per row)},
+                     -17/{\faFolder\ \code{series/}}/{every slice as a PNG, DICOM geometry, which series has which role},
+                     -23/{\faFolder\ \code{tools/}}/{\code{view\_slices}: 1--4 slices, cropped, zoomed, adjustable brightness\\
+                         \code{compare\_location}: where does this point lie in another series?},
+                     -31/{\faFolder\ \code{scratch/views/}}/{the only writable folder, for the viewer's output}} {
+    \draw[muted] (2,\y) -- (5,\y);
+    \node at (5,\y) {\t};
+    \node[text=muted, align=left] at (40,\y) {\c};
+  }
+\end{tikzpicture}
+\caption{The workspace (after tascj's write-up). The agent sees one study only; switching the underlying model was
+one line of configuration, so models and instructions could be compared fairly.}
+\label{fig:workspace}
+\end{figure}
+
+\section{Evidence first, then a number}
+
+The required answer format made the agent write its evidence \emph{before} its probability, per finding. In the style
+of their format, for our Study K:
+
+\begin{center}
+\begin{tcolorbox}[enhanced, width=0.86\linewidth, colback=white, colframe=grid, boxrule=0.5pt, arc=1mm,
+   fontupper=\scriptsize\ttfamily, left=3mm]
+"acl": \{\\
+\hspace*{3mm}"report\_evidence": ["Complete rupture of the anterior cruciate ligament."],\\
+\hspace*{3mm}"image\_evidence": ["SAG\_FLUID slices 14-17: no continuous ACL fibres between femur\\
+\hspace*{3mm}\hspace*{22mm}and tibia; fluid in the notch. Structural sagittal agrees."],\\
+\hspace*{3mm}"present\_probability": 0.97\\
+\}
+\end{tcolorbox}
+\end{center}
+
+\begin{why}
+Writing the evidence first forces the model to ``look before it judges'', and it makes every label checkable: a human
+can see which slices the agent looked at and whether the claim came from the report or from the image.
+\end{why}
+
+\section{How good were the labels?}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[xbar, width=10.5cm, height=7.4cm, bar width=3mm, xmin=0.78, xmax=0.96,
+    symbolic y coords={trained,astra2,astra1,hulu,qwen,clin,v4,v3},
+    ytick={trained,astra2,astra1,hulu,qwen,clin,v4,v3}, yticklabels={{agent + trained guide (in-sample)}, {agent: Astra v2}, {agent: Astra v1},
+      {Hulu-Med, report + 21 slices}, {Qwen Next, report + 21 slices}, {ClinFusion, report + 21 slices},
+      {\textbf{our v4}, report only}, {\textbf{our v3}, report only}},
+    y dir=reverse, y tick label style={font=\scriptsize}, xmajorgrids, xlabel={agreement with the 58 gold studies (macro AUC)},
+    xlabel style={font=\footnotesize}, nodes near coords, nodes near coords style={font=\scriptsize, anchor=west},
+    point meta=x, every node near coord/.append style={/pgf/number format/fixed, /pgf/number format/precision=3,
+    /pgf/number format/fixed zerofill}, enlarge y limits=0.08]
+  \addplot[barthem, bar shift=0pt] coordinates {(0.943,trained) (0.938,astra2) (0.936,astra1)};
+  \addplot[fill=them!45, draw=white, bar shift=0pt] coordinates {(0.909,hulu) (0.896,qwen) (0.874,clin)};
+  \addplot[barus, bar shift=0pt] coordinates {(0.879,v4) (0.809,v3)};
+\end{axis}
+\end{tikzpicture}
+\caption{Label quality, same ruler for everybody. Single-pass readers that saw a fixed packet of 21 slices (7 per
+plane) already matched or beat our report-only labels; agents that chose what to look at reached 0.94. The winners'
+numbers are slightly optimistic: the gold studies were also used to develop their instructions.}
+\label{fig:labelquality}
+\end{figure}
+
+\begin{innumbers}
+Same image model (CoAtNet, 224\,px), only the labels swapped (earlier image-aware labels $\rightarrow$ agent labels):
+\textbf{0.922 $\rightarrow$ 0.935} on the public leaderboard. For comparison, our own label upgrade (v3 $\rightarrow$
+v4) gave +0.016.
+\end{innumbers}
+
+\section{Judging labels by more than AUC}
+
+AUC only checks the order. For \emph{training} labels the values matter too (Chapter~\ref{ch:auc}), so they also
+counted two things:
+\begin{itemize}
+\item \term{Log loss}: the average BCE of the labels against the gold answers. Lower = better calibrated.
+\item \term{Confident errors}: labels that were confidently wrong (a high probability where the doctors said no, or
+      the reverse), out of $58 \times 12 = 696$.
+\end{itemize}
+
+\begin{center}\small
+\begin{tabular}{llccc}
+\toprule
+Model & Instructions & AUC & log loss & confident errors \\
+\midrule
+GPT-6 Luna & tascj's & 0.904 & 0.555 & 92 \\
+GPT-6 Luna & sakaku's & 0.891 & 0.465 & 61 \\
+GPT-6.1 Sol & tascj's & 0.928 & 0.492 & 63 \\
+GPT-6.1 Sol & sakaku's & 0.932 & 0.350 & 44 \\
+GPT-6 Astra & sakaku's & \textbf{0.936} & \textbf{0.329} & \textbf{35} \\
+\bottomrule
+\end{tabular}
+\end{center}
+Two lessons in one table: a stronger model helps, and \textbf{the instructions matter as much as the model}. sakaku's
+instructions for turning evidence into a probability halved the confident errors.
+
+\subsection*{Calibration: taming over-confidence}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[width=6.4cm, height=6.4cm, xmin=0, xmax=1, ymin=0, ymax=1, xlabel={agent's probability $p$},
+    ylabel={calibrated label $p'$}, grid=major, xlabel style={font=\footnotesize}, ylabel style={font=\footnotesize}]
+  \addplot[muted, dashed] coordinates {(0,0) (1,1)};
+  \addplot[them, line width=1.4pt, domain=0.001:0.999, samples=120] {1/(1+exp(-0.77*ln(x/(1-x))))};
+  \node[font=\scriptsize, anchor=west, text=them!85!black] at (axis cs:0.05,0.88) {$p' = \sigma(0.77\cdot\text{logit}\,p)$};
+\end{axis}
+\end{tikzpicture}\hspace{6mm}
+\begin{minipage}[b]{0.42\linewidth}\small
+\term{Temperature scaling}: convert the probability back to a logit, multiply by a factor $k$, squeeze again.
+With $k = 0.77$ (fitted on gold), a 0.99 becomes about 0.97 and a 0.02 about 0.05: the agents were a bit too sure
+of themselves. In tascj's step-by-step test this added +0.0014 on gold.\par\bigskip
+\end{minipage}
+\caption{Calibrating the labels before training.}
+\end{figure}
+
+\section{A guide that learns from the doctors}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm,
+  st/.style={draw=them, fill=whyfill, rounded corners=2mm, minimum width=30mm, minimum height=10mm, align=center, font=\scriptsize},
+  ar/.style={-{Stealth[length=2mm]}, line width=0.8pt, them}]
+  \node[st] (a) at (0,0) {label one gold study\\ as usual};
+  \node[st] (b) at (40,0) {see the doctors'\\ answers};
+  \node[st] (c) at (80,0) {reflect and rewrite\\ a notes file};
+  \draw[ar] (a) -- (b); \draw[ar] (b) -- (c);
+  \draw[ar] (c.south) -- ++(0,-6) -| (a.south) node[pos=0.25, below, font=\scriptsize] {next gold study};
+  \node[st, draw=wordline, fill=wordfill, minimum width=36mm] (d) at (125,0) {after N studies:\\ write a \textbf{reading guide}};
+  \draw[ar, wordline] (c) -- (d);
+\end{tikzpicture}
+\caption{The ``trained guide'': one long agent session learns from the 58 gold studies and writes down what it learned.
+The guide is then added to the instructions for labelling everything else.}
+\end{figure}
+
+\begin{center}\small
+\begin{tabular}{lccc}
+\toprule
+Astra labels on the 58 gold studies & AUC & log loss & confident errors \\
+\midrule
+without the guide & 0.936 & 0.329 & 35 \\
++ guide learned on other folds (honest test) & 0.936 & 0.307 & \textbf{19} \\
++ guide learned on the same 58 (optimistic) & 0.943 & 0.300 & 16 \\
+\bottomrule
+\end{tabular}
+\end{center}
+The honest test shows the real effect: same ranking, but \textbf{half the confident errors}.
+
+\section{Small decisions that mattered}
+
+\begin{itemize}
+\item \textbf{Continuous, not binned.} Asking for one of six bins gave 0.883; asking for a probability 0.936.
+      Our v4 labeller had the same instinct (probabilities over letters), but only five letters.
+\item \textbf{Silence is not negative, uncertainty is not positive}: the same rule as our v4 letters N and U.
+\item \textbf{Synovitis from the images.} Synovitis wording was removed from the report before the agent saw it, so the
+      agent had to judge the joint lining from the images instead of copying the report.
+\item \textbf{Mixing label sources.} The final labels for some models averaged five sources (two Astra versions, the
+      teammate's Astra labels, two single-pass readers) with one weight per source for all findings. Per-finding
+      weights looked better but did not survive a leave-one-out check.
+\end{itemize}
+
+\begin{keyidea}
+The decisive difference was not a cleverer prompt. It was \textbf{giving the labeller the images}. Reports describe
+what the original radiologist chose to write; the gold labels describe what is in the images. Only an image-reading
+labeller can close that gap, and that is exactly where our labels were weakest (Synovitis, Contusion, Lateral OA).
+\end{keyidea}
+
+\begin{watchout}
+This was within the rules: the host had explicitly allowed hosted LLM APIs for working with the reports. The cost was
+real (thousands of agent sessions with a frontier model), but by the rules it counted as ``reasonably accessible''.
+\end{watchout}
+
+\begin{checkpoint}
+\begin{itemize}
+\done I can explain the difference between a prompt and an agent.
+\done I know why evidence-first answers and calibration made better training labels.
+\quiz Q12.1: Why might a label set with a higher AUC still be worse for training than one with a lower AUC?
+\quiz Q12.2: Why remove the synovitis wording from the report before the agent reads it?
+\quiz Q12.3: The trained guide was learned on gold studies. Why is the ``other folds'' row the one to trust?
+\end{itemize}
+\end{checkpoint}
